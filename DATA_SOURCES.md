@@ -90,3 +90,59 @@ the 2 skipped pages in the 2022-2023 report contain no extractable text layer
 (likely cover/section-divider images).
 
 Total corpus after chunking: 48 chunks, 21,780 tokens across both documents.
+
+## Known Limitations — Retrieval Quality
+
+### Cross-lingual retrieval gap
+
+Query embeddings in Vietnamese show measurably weaker match quality (distance
+~1.22-1.28) than English queries against the same English-language PDF content
+(distance ~0.94-1.14), tested against `text-embedding-3-small`. This is a known
+limitation of using a single embedding pass without query translation or a
+bilingual reranking step. Vietnamese queries still retrieve relevant results in
+most cases, but rank position and confidence are lower than an English-phrased
+equivalent query.
+
+### Chart/infographic content extraction
+
+Both EVN reports contain data visualizations (bar/pie charts) rendered as
+vector graphics with text labels. PyMuPDF extracts the text labels in PDF
+draw-order, not visual reading-order, which scrambles the association between
+category labels, years, and percentage values in these sections (example:
+page 9 of the 2022-2023 report, sector-breakdown chart). This project does not
+implement chart/table structure recovery (out of scope for V1). Any retrieval
+result identified as originating from a chart-derived chunk should be treated
+as unreliable for precise attribution; the agent's system prompt (M7) directs
+it to acknowledge uncertainty rather than assert a specific number-to-category
+mapping when the retrieved text is this kind of scrambled content.
+
+### Verified clean facts used for demo/evaluation
+
+The following facts were manually verified as cleanly extracted (complete
+sentences, unambiguous number-to-subject association) and are used as the
+primary Knowledge QA test questions:
+
+| Fact | Value | Source |
+|---|---|---|
+| Rural household electrification rate | 99.74% | EVN Annual Report 2024-2025, p.9 |
+| Total commercial electricity output, 2023 | 253.5 billion kWh (+4.46% YoY) | EVN Annual Report 2022-2023, p.10 |
+| Total power production and purchase, 2023 | 271.68 billion kWh (+3.68% YoY) | EVN Annual Report 2022-2023, p.10 |
+| Power loss rate | 6.05% (improved 0.2pp) | EVN Annual Report 2022-2023, p.10 |
+
+## Chunking granularity — mitigation applied
+
+Root cause identified during M5 testing: page 10 of the 2022-2023 report packs
+multiple distinct financial topics (commercial electricity output, total
+production, power loss rate) into the same page-level chunk under the current
+page+token chunking strategy, diluting the chunk's embedding signal. This
+caused the correct chunk for a commercial-electricity-output query to rank
+#6 out of 48 — just outside a top-5 cutoff.
+
+Mitigation applied: default RAG_TOP_K increased from 5 to 8. Justified by
+small corpus size (48 chunks total) where retrieving 8 is still a highly
+selective ~17% of the corpus, at negligible additional query cost.
+
+This does not fix the root cause. A proper fix (smaller chunk_size or
+semantic/topic-aware chunking instead of raw page+token splitting) is
+planned V2 work, consistent with the chunk-size experimentation (500/700/900
+tokens) already anticipated in the original project plan.
