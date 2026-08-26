@@ -129,6 +129,37 @@ primary Knowledge QA test questions:
 | Total power production and purchase, 2023 | 271.68 billion kWh (+3.68% YoY) | EVN Annual Report 2022-2023, p.10 |
 | Power loss rate | 6.05% (improved 0.2pp) | EVN Annual Report 2022-2023, p.10 |
 
+### Multi-domain corpus vocabulary collision (added when policy directive KB was introduced)
+
+Adding Chỉ thị 20/CT-TTg (policy directive on electricity saving) as a third
+KB source revealed a compounding retrieval weakness: short, generic Vietnamese
+queries about "hộ dân có điện" (households having electricity access) share
+surface vocabulary ("điện", "hộ gia đình", "tiết kiệm điện") with the policy
+directive's content about electricity *conservation*, despite being
+semantically unrelated topics. For the test query "Tỷ lệ hộ dân nông thôn có
+điện là bao nhiêu?", the correct chunk (EVN Annual Report 2024-2025, page 9)
+drops to rank #11 out of 62 chunks, with a notably flat distance distribution
+(1.29-1.46) indicating weak discriminative signal for this query phrasing.
+
+This compounds a pre-existing issue: rank #1 for this query is EVN Annual
+Report 2022-2023, page 9 — the chart-derived content already flagged as
+unreliable in the "Chart/infographic content extraction" limitation above —
+which outranks the correct source independently of the Chỉ thị 20 addition.
+
+Mitigation applied: RAG_TOP_K increased from 8 to 10, maintaining a consistent
+~16% selectivity ratio as the corpus grew from 48 to 62 chunks. This does not
+fully resolve this specific short-query case (marked as a known xfail in
+tests/test_retriever.py). Verified production behavior (the agent's own
+tool-generated queries, which tend to be longer and more contextual) correctly
+retrieves and cites this fact — see tests/test_agent.py::test_gate_3_knowledge_question,
+which passes. The retriever-level unit test uses an intentionally terse
+synthetic query that is not representative of actual agent-generated queries.
+
+Root cause is a structural limitation of single-pass dense embedding retrieval
+across a small, multi-domain corpus without domain-aware filtering or query
+expansion — considered out of scope for V1, consistent with the project's
+existing decision to defer hybrid search and reranking to V2.
+
 ## Chunking granularity — mitigation applied
 
 Root cause identified during M5 testing: page 10 of the 2022-2023 report packs
@@ -146,3 +177,17 @@ This does not fix the root cause. A proper fix (smaller chunk_size or
 semantic/topic-aware chunking instead of raw page+token splitting) is
 planned V2 work, consistent with the chunk-size experimentation (500/700/900
 tokens) already anticipated in the original project plan.
+
+### Sample size caveat on the Gate 4 fix
+
+The systemic prompt fix (calculate tool enforcement) was validated against 11
+runs (10 manual + 1 pytest), improving from ~87% to 100% calculate-invocation
+rate. Given the original failure rate was low (~13% on a 15-run baseline), 11
+consecutive passes is an encouraging signal but not statistically conclusive
+proof of a 0% failure rate — a residual low-single-digit-percent failure rate
+cannot be ruled out from this sample size. This is noted here rather than
+re-tested further at this stage to avoid disproportionate cost/time spent on
+a low-severity residual risk; it should inform the evaluation methodology in
+M11 (evals/run_evals.py), which should run each test case multiple times where
+feasible rather than treating a single pass as conclusive, especially for
+gate-critical behaviors like tool-selection compliance.

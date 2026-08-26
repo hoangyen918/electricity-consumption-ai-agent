@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-from rag.pdf_extractor import extract_pdf_with_metadata
+from rag.pdf_extractor import extract_pdf_with_metadata, extract_txt_with_metadata
 from rag.chunker import chunk_document
 from rag.embeddings import embed_texts
 from rag.vector_store import upsert_chunks, count_documents
@@ -28,12 +28,19 @@ def main():
     print("STEP 1: Extract + chunk all documents")
     print("=" * 60)
     for src in sources:
-        pdf_path = Path("kb/raw") / src["filename"]
-        if not pdf_path.exists():
-            print(f"⚠️  SKIP — file missing: {pdf_path}")
+        doc_path = Path("kb/raw") / src["filename"]
+        if not doc_path.exists():
+            print(f"⚠️  SKIP — file missing: {doc_path}")
             continue
 
-        pages = extract_pdf_with_metadata(str(pdf_path), src)
+        if src["filename"].endswith(".pdf"):
+            pages = extract_pdf_with_metadata(str(doc_path), src)
+        elif src["filename"].endswith(".txt"):
+            pages = extract_txt_with_metadata(str(doc_path), src)
+        else:
+            print(f"⚠️  SKIP — unsupported file type: {doc_path}")
+            continue
+
         chunks = chunk_document(pages)
         all_chunks.extend(chunks)
         print(f"  {src['title']}: {len(pages)} pages -> {len(chunks)} chunks")

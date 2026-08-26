@@ -18,5 +18,15 @@
     "year_start": 2022,
     "year_end": 2023,
     "language": "vi_en_mixed"
+  },
+  {
+    "id": "chi_thi_20_2023",
+    "title": "Chỉ thị 20/CT-TTg về tăng cường tiết kiệm điện giai đoạn 2023-2025",
+    "filename": "chi_thi_20_2023.txt",
+    "organization": "Thủ tướng Chính phủ",
+    "document_type": "policy_directive",
+    "year_start": 2023,
+    "year_end": 2025,
+    "language": "vi"
   }
 ]

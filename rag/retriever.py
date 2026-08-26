@@ -32,6 +32,7 @@ def retrieve(query: str, top_k: int | None = None, where: dict | None = None) ->
             source=meta["source"],
             page=meta["page"],
             distance=dist,
+            document_type=meta.get("document_type", "annual_report"),
         ))
     return results
 

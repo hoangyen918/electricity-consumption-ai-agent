@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     chroma_path: str = "storage/chroma"
     chroma_collection: str = "electricity_kb"
     max_agent_iterations: int = 5
-    rag_top_k: int = 8
+    rag_top_k: int = 10
     app_referer: str = "http://localhost:8501"
     app_title: str = "Electricity Consumption AI Agent"
 
