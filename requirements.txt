@@ -11,3 +11,4 @@ tiktoken
 streamlit
 pytest
 requests
+ucimlrepo
