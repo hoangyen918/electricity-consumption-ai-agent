@@ -78,3 +78,15 @@ grouping/aggregation, not original UCI fields.
 - `data/raw/tetouan_raw.csv` — untouched download, gitignored (regenerate with `python scripts/download_data.py`)
 - `data/processed/tetouan_clean.csv` — cleaned + renamed + derived features, gitignored (regenerate with `python scripts/prepare_data.py`)
 - `data/sample/tetouan_sample.csv` — first 1,000 rows of processed data, **committed to git** so the repo is runnable immediately after clone without re-downloading
+
+### Document format note
+
+Both EVN annual reports obtained are the condensed public-facing format
+(19 pages each), not the full statutory audited financial statement filing.
+This is EVN's standard public annual report format for general distribution.
+
+Extraction coverage: 19/19 pages (2024-2025), 17/19 pages (2022-2023) —
+the 2 skipped pages in the 2022-2023 report contain no extractable text layer
+(likely cover/section-divider images).
+
+Total corpus after chunking: 48 chunks, 21,780 tokens across both documents.
