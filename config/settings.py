@@ -5,7 +5,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
-    chat_model: str = "deepseek/deepseek-v3.2"
+    chat_model: str = "qwen/qwen3.6-27b"
     embedding_model: str = "openai/text-embedding-3-small"
     chroma_path: str = "storage/chroma"
     chroma_collection: str = "electricity_kb"
