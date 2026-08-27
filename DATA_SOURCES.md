@@ -160,6 +160,30 @@ across a small, multi-domain corpus without domain-aware filtering or query
 expansion — considered out of scope for V1, consistent with the project's
 existing decision to defer hybrid search and reranking to V2.
 
+### Score threshold for weak retrieval matches
+
+SCORE_THRESHOLD = 1.3 was determined empirically (not guessed) by measuring
+distances of known-correct chunks (VERIFIED_CASES) against a known-nonsense query, on
+2026-08-27. This filters out results server-side when ALL retrieved candidates are too
+dissimilar to be reliable, per the original requirement (yêu_cầu_đề.md §2.3: "Nếu
+retrieve không ra gì liên quan → agent nói 'không tìm thấy', không đoán").
+
+Initial measurement suggested 1.15 (highest known-good distance 1.0529, plus a small
+safety margin, well below the nonsense-query floor of ~1.64). This was tightened too
+aggressively: it broke two previously-passing tests using a shorter phrasing of a
+known-good query ("Tỷ lệ tổn thất điện năng là bao nhiêu?", without "của EVN"), whose
+closest match had distance 1.1618. Per the project's explicit policy of never tightening
+a threshold to force a regression to pass, the value was loosened to 1.3 instead of
+adjusting the test. All 2 non-xfail VERIFIED_CASES, the nonsense-query test, and all 4
+production Gate tests (tests/test_agent.py) were re-verified passing at this value.
+
+This does not fully separate "good" and "bad" matches cleanly — the small, multi-domain
+corpus produces overlapping distance ranges between weak-but-correct and clearly-irrelevant
+content (see "Multi-domain corpus vocabulary collision" above). The threshold is set
+conservatively to avoid false negatives (incorrectly rejecting real information) at the
+cost of not catching every weak match; the system prompt's instruction to hedge on
+ambiguous retrieved content remains the primary defense for borderline cases.
+
 ## Chunking granularity — mitigation applied
 
 Root cause identified during M5 testing: page 10 of the 2022-2023 report packs

@@ -87,6 +87,39 @@ def render_sidebar():
         except Exception:
             st.error("Chưa kết nối được ChromaDB. Chạy `python scripts/ingest_kb.py` trước.")
 
+        st.write("**Tài liệu đã nạp:**")
+        try:
+            from rag.kb_manager import list_sources_with_chunk_counts, delete_document, add_document
+            sources = list_sources_with_chunk_counts()
+            for src in sources:
+                col_a, col_b = st.columns([4, 1])
+                col_a.write(f"📄 {src['title']} ({src['chunk_count']} đoạn)")
+                if col_b.button("🗑️", key=f"del_{src['id']}"):
+                    deleted = delete_document(src["id"])
+                    st.success(f"Đã xóa {deleted} đoạn từ '{src['title']}'")
+                    st.rerun()
+        except Exception as e:
+            st.error(f"Lỗi khi tải danh sách KB: {e}")
+
+        st.write("**Thêm tài liệu mới vào KB:**")
+        kb_file = st.file_uploader(
+            "Upload PDF/TXT/MD", type=["pdf", "txt", "md"], key="kb_uploader"
+        )
+        kb_title = st.text_input("Tên hiển thị khi trích dẫn", key="kb_title_input")
+        if kb_file is not None and kb_title:
+            if st.button("📥 Nạp vào Knowledge Base"):
+                try:
+                    from rag.kb_manager import add_document
+                    result = add_document(
+                        file_bytes=kb_file.getvalue(),
+                        original_filename=kb_file.name,
+                        title=kb_title,
+                    )
+                    st.success(f"Đã nạp '{kb_title}': {result['chunk_count']} đoạn.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Lỗi khi nạp tài liệu: {e}")
+
         st.divider()
 
         st.subheader("⚙️ Cấu hình")

@@ -6,6 +6,9 @@ from rag.chunker import count_tokens
 from tools.tool_results import success, failure
 from config.settings import SETTINGS
 
+# Ngưỡng xác định qua đo đạc thực tế ngày 2026-08-27, xem chi tiết trong DATA_SOURCES.md
+SCORE_THRESHOLD = 1.3
+
 
 def retrieve(query: str, top_k: int | None = None, where: dict | None = None) -> list[dict]:
     """
@@ -49,16 +52,18 @@ def search_knowledge_base(query: str, top_k: int | None = None, source: str | No
             where = {"source": source}
 
         results = retrieve(query, top_k=top_k, where=where)
+        filtered_results = [r for r in results if r["distance"] <= SCORE_THRESHOLD]
 
-        if not results:
+        if not filtered_results:
             return failure(
-                "No relevant information found in the knowledge base for this query."
+                "No relevant information found in the knowledge base for this query "
+                "(closest matches were too dissimilar to be considered reliable)."
             )
 
         return success({
             "query": query,
-            "results": results,
-            "result_count": len(results),
+            "results": filtered_results,
+            "result_count": len(filtered_results),
             "embedding_tokens": count_tokens(query),
         })
     except Exception as e:
