@@ -41,15 +41,31 @@ def retrieve(query: str, top_k: int | None = None, where: dict | None = None) ->
     return results
 
 
-def search_knowledge_base(query: str, top_k: int | None = None, source: str | None = None) -> dict:
+def search_knowledge_base(
+    query: str,
+    top_k: int | None = None,
+    source: str | None = None,
+    language: str | None = None,
+    document_type: str | None = None,
+) -> dict:
     """
     Tool-facing function — đây là function mà agent sẽ gọi ở M6/M7.
     Trả về theo format chuẩn ok/data/error đã dùng ở tools/tool_results.py.
     """
     try:
-        where = None
+        conditions = []
         if source:
-            where = {"source": source}
+            conditions.append({"source": source})
+        if language:
+            conditions.append({"language": language})
+        if document_type:
+            conditions.append({"document_type": document_type})
+
+        where = None
+        if len(conditions) == 1:
+            where = conditions[0]
+        elif len(conditions) > 1:
+            where = {"$and": conditions}
 
         results = retrieve(query, top_k=top_k, where=where)
         filtered_results = [r for r in results if r["distance"] <= SCORE_THRESHOLD]

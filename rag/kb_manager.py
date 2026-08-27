@@ -52,11 +52,12 @@ def add_document(
     document_type: str = "user_document",
     year_start: str = "",
     year_end: str = "",
+    language: str = "",
 ) -> dict:
     """
     Thêm 1 tài liệu mới: lưu file vào kb/raw/, extract, chunk, embed, upsert vào Chroma,
-    cập nhật kb/sources.json. year_start/year_end dùng chuỗi rỗng mặc định, KHÔNG dùng
-    None vì ChromaDB không chấp nhận None trong metadata (sẽ crash lúc upsert).
+    cập nhật kb/sources.json. year_start/year_end/language dùng chuỗi rỗng mặc định, KHÔNG
+    dùng None vì ChromaDB không chấp nhận None trong metadata (sẽ crash lúc upsert).
     """
     ext = Path(original_filename).suffix.lower()
     if ext not in SUPPORTED_EXTENSIONS:
@@ -85,6 +86,7 @@ def add_document(
         "document_type": document_type,
         "year_start": year_start,
         "year_end": year_end,
+        "language": language,
     }
 
     pages = extract_document(str(saved_path), source_metadata)

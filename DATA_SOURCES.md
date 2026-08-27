@@ -184,6 +184,27 @@ conservatively to avoid false negatives (incorrectly rejecting real information)
 cost of not catching every weak match; the system prompt's instruction to hedge on
 ambiguous retrieved content remains the primary defense for borderline cases.
 
+### Update after IEA corpus expansion (62 -> 6,127 chunks)
+
+After adding 14 IEA reports (World Energy Outlook 2019-2025, Energy Efficiency 2019-2025,
+6,065 new chunks), the nonsense-query distance floor dropped from 1.6356 to 1.4624 (safety
+margin from SCORE_THRESHOLD=1.3 narrowed from 0.58 to 0.41). Both known-correct-case
+distances were unchanged (as expected — cosine distance between two fixed vectors is
+independent of corpus size), only their RANK shifted due to competition from new content.
+Verified: the interference in all 3 known test cases came from Chỉ thị 20 (pre-existing
+vocabulary collision, see above), NOT from the new IEA content — no IEA chunk appeared in
+the top-15 results for any Vietnamese-language EVN-specific test query, likely because the
+same cross-lingual embedding gap that is a known weakness elsewhere incidentally acts as a
+buffer here. SCORE_THRESHOLD=1.3 kept unchanged (still valid, margin positive both directions)
+but this margin should be re-measured before any further significant corpus expansion.
+
+document_type filtering (already available via search_knowledge_base's existing
+document_type parameter, added in M10c) was empirically shown to improve ranking for
+EVN-specific queries by excluding Chỉ thị 20 and IEA content: the known xfail case
+improved from rank #11 to rank #5 when filtered to document_type='annual_report'.
+The system prompt now instructs the agent to apply this filter when a question is
+clearly EVN-report-specific.
+
 ## Chunking granularity — mitigation applied
 
 Root cause identified during M5 testing: page 10 of the 2022-2023 report packs

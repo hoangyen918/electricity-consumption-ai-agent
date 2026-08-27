@@ -64,6 +64,8 @@ class CalculateArgs(BaseModel):
 class SearchKnowledgeBaseArgs(BaseModel):
     query: str
     top_k: int = 8
+    language: Optional[str] = None
+    document_type: Optional[str] = None
 
 
 def execute_tool(tool_name: str, arguments: dict, dataset_manager: DatasetManager) -> dict:
@@ -130,7 +132,12 @@ def execute_tool(tool_name: str, arguments: dict, dataset_manager: DatasetManage
 
         elif tool_name == "search_knowledge_base":
             args = SearchKnowledgeBaseArgs(**arguments)
-            return search_knowledge_base(args.query, args.top_k)
+            return search_knowledge_base(
+                args.query,
+                top_k=args.top_k,
+                language=args.language,
+                document_type=args.document_type,
+            )
 
         else:
             return failure(f"Unknown tool: '{tool_name}'")

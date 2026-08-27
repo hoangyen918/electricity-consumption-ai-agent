@@ -157,6 +157,24 @@ SEARCH_KNOWLEDGE_BASE_SCHEMA = {
             "properties": {
                 "query": {"type": "string", "description": "Câu hỏi hoặc từ khóa cần tìm"},
                 "top_k": {"type": "integer", "description": "Số kết quả muốn lấy, mặc định 8"},
+                "language": {
+                    "type": "string",
+                    "description": (
+                        "Lọc theo ngôn ngữ gốc của tài liệu, ví dụ 'en' (báo cáo thường niên EVN, "
+                        "tiếng Anh) hoặc 'vi' (văn bản pháp luật tiếng Việt như Chỉ thị). Để trống "
+                        "nếu câu hỏi không cần giới hạn theo ngôn ngữ tài liệu."
+                    ),
+                },
+                "document_type": {
+                    "type": "string",
+                    "description": (
+                        "Lọc theo loại tài liệu. Giá trị hợp lệ: 'annual_report' (báo cáo thường niên "
+                        "EVN), 'policy_directive' (văn bản quy phạm pháp luật, ví dụ Chỉ thị của Thủ "
+                        "tướng Chính phủ). Dùng khi câu hỏi rõ ràng chỉ hỏi về quy định/chính sách "
+                        "(nên đặt 'policy_directive') hoặc chỉ về số liệu kinh doanh của EVN (nên đặt "
+                        "'annual_report'). Để trống nếu câu hỏi không rõ ràng thuộc loại nào."
+                    ),
+                },
             },
             "required": ["query"],
         },

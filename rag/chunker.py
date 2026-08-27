@@ -82,5 +82,6 @@ def chunk_document(pages: list[dict]) -> list[dict]:
                 "document_type": page_record["document_type"],
                 "year_start": page_record["year_start"],
                 "year_end": page_record["year_end"],
+                "language": page_record.get("language", ""),
             })
     return all_chunks

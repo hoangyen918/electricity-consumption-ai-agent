@@ -12,3 +12,4 @@ streamlit
 pytest
 requests
 ucimlrepo
+rank-bm25

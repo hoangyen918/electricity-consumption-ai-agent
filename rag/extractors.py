@@ -21,6 +21,7 @@ def _wrap(source_metadata: dict, page: int, text: str) -> dict:
         "document_type": source_metadata["document_type"],
         "year_start": source_metadata["year_start"],
         "year_end": source_metadata["year_end"],
+        "language": source_metadata.get("language", ""),
     }
 
 

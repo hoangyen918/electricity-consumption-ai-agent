@@ -7,7 +7,7 @@
     "document_type": "annual_report",
     "year_start": 2024,
     "year_end": 2025,
-    "language": "vi_en_mixed"
+    "language": "en"
   },
   {
     "id": "evn_annual_2022_2023",
@@ -17,7 +17,7 @@
     "document_type": "annual_report",
     "year_start": 2022,
     "year_end": 2023,
-    "language": "vi_en_mixed"
+    "language": "en"
   },
   {
     "id": "chi_thi_20_2023",
@@ -28,5 +28,61 @@
     "year_start": 2023,
     "year_end": 2025,
     "language": "vi"
+  },
+  {
+    "id": "iea_weo_2019", "title": "World Energy Outlook 2019", "filename": "WorldEnergyOutlook2019.pdf",
+    "organization": "IEA", "document_type": "international_report", "year_start": "2019", "year_end": "2019", "language": "en"
+  },
+  {
+    "id": "iea_weo_2020", "title": "World Energy Outlook 2020", "filename": "WorldEnergyOutlook2020.pdf",
+    "organization": "IEA", "document_type": "international_report", "year_start": "2020", "year_end": "2020", "language": "en"
+  },
+  {
+    "id": "iea_weo_2021", "title": "World Energy Outlook 2021", "filename": "WorldEnergyOutlook2021.pdf",
+    "organization": "IEA", "document_type": "international_report", "year_start": "2021", "year_end": "2021", "language": "en"
+  },
+  {
+    "id": "iea_weo_2022", "title": "World Energy Outlook 2022", "filename": "WorldEnergyOutlook2022.pdf",
+    "organization": "IEA", "document_type": "international_report", "year_start": "2022", "year_end": "2022", "language": "en"
+  },
+  {
+    "id": "iea_weo_2023", "title": "World Energy Outlook 2023", "filename": "WorldEnergyOutlook2023.pdf",
+    "organization": "IEA", "document_type": "international_report", "year_start": "2023", "year_end": "2023", "language": "en"
+  },
+  {
+    "id": "iea_weo_2024", "title": "World Energy Outlook 2024", "filename": "WorldEnergyOutlook2024.pdf",
+    "organization": "IEA", "document_type": "international_report", "year_start": "2024", "year_end": "2024", "language": "en"
+  },
+  {
+    "id": "iea_weo_2025", "title": "World Energy Outlook 2025", "filename": "WorldEnergyOutlook2025.pdf",
+    "organization": "IEA", "document_type": "international_report", "year_start": "2025", "year_end": "2025", "language": "en"
+  },
+  {
+    "id": "iea_ee_2019", "title": "Energy Efficiency 2019", "filename": "EnergyEfficiency2019.pdf",
+    "organization": "IEA", "document_type": "international_report", "year_start": "2019", "year_end": "2019", "language": "en"
+  },
+  {
+    "id": "iea_ee_2020", "title": "Energy Efficiency 2020", "filename": "EnergyEfficiency2020.pdf",
+    "organization": "IEA", "document_type": "international_report", "year_start": "2020", "year_end": "2020", "language": "en"
+  },
+  {
+    "id": "iea_ee_2021", "title": "Energy Efficiency 2021", "filename": "EnergyEfficiency2021.pdf",
+    "organization": "IEA", "document_type": "international_report", "year_start": "2021", "year_end": "2021", "language": "en"
+  },
+  {
+    "id": "iea_ee_2022", "title": "Energy Efficiency 2022", "filename": "EnergyEfficiency2022.pdf",
+    "organization": "IEA", "document_type": "international_report", "year_start": "2022", "year_end": "2022", "language": "en"
+  },
+  {
+    "id": "iea_ee_2023", "title": "Energy Efficiency 2023", "filename": "EnergyEfficiency2023.pdf",
+    "organization": "IEA", "document_type": "international_report", "year_start": "2023", "year_end": "2023", "language": "en"
+  },
+  {
+    "id": "iea_ee_2024", "title": "Energy Efficiency 2024", "filename": "EnergyEfficiency2024.pdf",
+    "organization": "IEA", "document_type": "international_report", "year_start": "2024", "year_end": "2024", "language": "en"
+  },
+  {
+    "id": "iea_ee_2025", "title": "Energy Efficiency 2025", "filename": "EnergyEfficiency2025.pdf",
+    "organization": "IEA", "document_type": "international_report", "year_start": "2025", "year_end": "2025", "language": "en"
   }
 ]

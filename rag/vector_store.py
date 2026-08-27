@@ -21,6 +21,9 @@ def get_collection():
     return _collection
 
 
+UPSERT_BATCH_SIZE = 1000  # ChromaDB có giới hạn max batch size (server đã gặp: 5461) — chia nhỏ để an toàn
+
+
 def upsert_chunks(chunks: list[dict], embeddings: list[list[float]]) -> None:
     """
     Ghi chunks vào Chroma bằng upsert (không phải add) — chạy lại nhiều lần
@@ -28,6 +31,7 @@ def upsert_chunks(chunks: list[dict], embeddings: list[list[float]]) -> None:
 
     chunks: list dict có chunk_id, text, và các metadata field khác.
     embeddings: list vector, CÙNG THỨ TỰ với chunks.
+    Tự động chia batch để không vượt quá giới hạn batch size của ChromaDB.
     """
     if len(chunks) != len(embeddings):
         raise ValueError(f"Mismatch: {len(chunks)} chunks vs {len(embeddings)} embeddings")
@@ -45,16 +49,19 @@ def upsert_chunks(chunks: list[dict], embeddings: list[list[float]]) -> None:
             "document_type": c["document_type"],
             "year_start": c["year_start"],
             "year_end": c["year_end"],
+            "language": c.get("language", ""),
         }
         for c in chunks
     ]
 
-    collection.upsert(
-        ids=ids,
-        embeddings=embeddings,
-        documents=documents,
-        metadatas=metadatas,
-    )
+    for i in range(0, len(ids), UPSERT_BATCH_SIZE):
+        end = i + UPSERT_BATCH_SIZE
+        collection.upsert(
+            ids=ids[i:end],
+            embeddings=embeddings[i:end],
+            documents=documents[i:end],
+            metadatas=metadatas[i:end],
+        )
 
 
 def count_documents() -> int:
