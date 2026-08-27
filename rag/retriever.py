@@ -2,6 +2,7 @@
 from rag.embeddings import embed_query
 from rag.vector_store import query_collection
 from rag.citations import format_search_result
+from rag.chunker import count_tokens
 from tools.tool_results import success, failure
 from config.settings import SETTINGS
 
@@ -58,6 +59,7 @@ def search_knowledge_base(query: str, top_k: int | None = None, source: str | No
             "query": query,
             "results": results,
             "result_count": len(results),
+            "embedding_tokens": count_tokens(query),
         })
     except Exception as e:
         return failure(f"Knowledge base search failed: {e}")

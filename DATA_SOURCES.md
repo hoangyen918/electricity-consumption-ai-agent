@@ -14,13 +14,13 @@ Two candidate models were compared using scripts/compare_models.py against 5 Vie
 test questions covering: natural language quality, hallucination resistance (no ground-truth
 data provided), tool-calling correctness, and honesty when no knowledge base is available.
 
-| Test | DeepSeek V3.2 | Qwen3.6 27B |
-|------|---------------|-------------|
-| Vietnamese fluency | Pass | Pass |
-| Tool calling (get_dataset_summary) | Pass | Pass |
-| Tool calling (calculate) | Pass | Pass |
-| Refuses to fabricate numeric answer without data | **FAIL** — invented "3321.8 kWh" with no supporting data or tool call | Pass — asked for the underlying data instead |
-| Honest about missing knowledge base | **FAIL** — answered confidently with specific percentages, no caveat | Partial pass — gave estimated figures but flagged them as unverified and recommended checking the source report |
+| Test                                             | DeepSeek V3.2                                                                | Qwen3.6 27B                                                                                                      |
+| ------------------------------------------------ | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Vietnamese fluency                               | Pass                                                                         | Pass                                                                                                             |
+| Tool calling (get_dataset_summary)               | Pass                                                                         | Pass                                                                                                             |
+| Tool calling (calculate)                         | Pass                                                                         | Pass                                                                                                             |
+| Refuses to fabricate numeric answer without data | **FAIL** — invented "3321.8 kWh" with no supporting data or tool call | Pass — asked for the underlying data instead                                                                    |
+| Honest about missing knowledge base              | **FAIL** — answered confidently with specific percentages, no caveat  | Partial pass — gave estimated figures but flagged them as unverified and recommended checking the source report |
 
 DeepSeek V3.2 was rejected due to a critical hallucination failure on the core numeric-accuracy
 requirement (rubric B2/C4 of the project brief: "never fabricate numbers, never fabricate sources").
@@ -55,17 +55,17 @@ prompts, or the UI. Values are reported as raw dataset units only.
 
 ### Data dictionary (processed column names)
 
-| Original column | Processed column | Type | Unit | Notes |
-|---|---|---|---|---|
-| DateTime | datetime | datetime | - | 10-minute interval |
-| Temperature | temperature | float | unspecified (likely °C) | |
-| Humidity | humidity | float | unspecified (likely %) | |
-| Wind Speed | wind_speed | float | unspecified | |
-| general diffuse flows | general_diffuse_flows | float | unspecified | solar radiation proxy |
-| diffuse flows | diffuse_flows | float | unspecified | solar radiation proxy |
-| Zone 1 Power Consumption | zone_1_consumption | float | **not specified by UCI — do not assume kWh/kW** | |
-| Zone 2 Power Consumption | zone_2_consumption | float | **not specified by UCI — do not assume kWh/kW** | |
-| Zone 3 Power Consumption | zone_3_consumption | float | **not specified by UCI — do not assume kWh/kW** | |
+| Original column          | Processed column      | Type     | Unit                                                   | Notes                 |
+| ------------------------ | --------------------- | -------- | ------------------------------------------------------ | --------------------- |
+| DateTime                 | datetime              | datetime | -                                                      | 10-minute interval    |
+| Temperature              | temperature           | float    | unspecified (likely °C)                               |                       |
+| Humidity                 | humidity              | float    | unspecified (likely %)                                 |                       |
+| Wind Speed               | wind_speed            | float    | unspecified                                            |                       |
+| general diffuse flows    | general_diffuse_flows | float    | unspecified                                            | solar radiation proxy |
+| diffuse flows            | diffuse_flows         | float    | unspecified                                            | solar radiation proxy |
+| Zone 1 Power Consumption | zone_1_consumption    | float    | **not specified by UCI — do not assume kWh/kW** |                       |
+| Zone 2 Power Consumption | zone_2_consumption    | float    | **not specified by UCI — do not assume kWh/kW** |                       |
+| Zone 3 Power Consumption | zone_3_consumption    | float    | **not specified by UCI — do not assume kWh/kW** |                       |
 
 ### Derived columns (added by this project, not part of original dataset)
 
@@ -122,12 +122,12 @@ The following facts were manually verified as cleanly extracted (complete
 sentences, unambiguous number-to-subject association) and are used as the
 primary Knowledge QA test questions:
 
-| Fact | Value | Source |
-|---|---|---|
-| Rural household electrification rate | 99.74% | EVN Annual Report 2024-2025, p.9 |
-| Total commercial electricity output, 2023 | 253.5 billion kWh (+4.46% YoY) | EVN Annual Report 2022-2023, p.10 |
+| Fact                                      | Value                           | Source                            |
+| ----------------------------------------- | ------------------------------- | --------------------------------- |
+| Rural household electrification rate      | 99.74%                          | EVN Annual Report 2024-2025, p.9  |
+| Total commercial electricity output, 2023 | 253.5 billion kWh (+4.46% YoY)  | EVN Annual Report 2022-2023, p.10 |
 | Total power production and purchase, 2023 | 271.68 billion kWh (+3.68% YoY) | EVN Annual Report 2022-2023, p.10 |
-| Power loss rate | 6.05% (improved 0.2pp) | EVN Annual Report 2022-2023, p.10 |
+| Power loss rate                           | 6.05% (improved 0.2pp)          | EVN Annual Report 2022-2023, p.10 |
 
 ### Multi-domain corpus vocabulary collision (added when policy directive KB was introduced)
 
@@ -191,3 +191,34 @@ a low-severity residual risk; it should inform the evaluation methodology in
 M11 (evals/run_evals.py), which should run each test case multiple times where
 feasible rather than treating a single pass as conclusive, especially for
 gate-critical behaviors like tool-selection compliance.
+
+
+### Tool selection — peak-date reasoning (fixed) and residual over-verification pattern
+
+An earlier version of the system prompt caused the agent to occasionally infer
+a "peak date" by aggregating with group_metric(group_by="date", aggregation="sum")
+instead of calling find_peak directly — these answer different questions
+(aggregated period totals vs. the single global extreme record) and the
+mismatch caused wrong dates, self-correction, and in one observed case,
+hitting MAX_AGENT_ITERATIONS. A prompt rule was added instructing the agent
+to call find_peak directly for "which moment had the single highest/lowest
+value" questions, reserving group_metric for genuinely grouped comparisons.
+
+Measured impact (10 runs of the affected question, before vs. after):
+
+- Wrong-strategy path via group_metric to infer peak date: 100% of failure
+  cases → 0/10 runs after the fix.
+- hit_max_iterations rate: reduced from occurring reliably in the failure
+  path to 1/10 runs (10%).
+- Average iterations: reduced from a fixed 5 (on failure) to a mean of 3.8
+  (median 4).
+
+Residual case (1/10): the agent reached the correct answer by iteration 3
+(find_peak → aggregate_metric) but then performed two unnecessary
+"double-check" calls (a redundant aggregate_metric with count, followed by
+a group_metric(group_by="date") call — again a large-payload tool), exhausting
+the iteration budget before producing a final answer. This is a distinct
+over-verification pattern, not the peak-date misidentification issue above,
+and was not addressed in this fix to avoid an untested prompt change that
+could reduce the agent's appropriate caution in other contexts. Left as a
+known limitation for V2 consideration.

@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-from rag.pdf_extractor import extract_pdf_with_metadata, extract_txt_with_metadata
+from rag.extractors import extract_document
 from rag.chunker import chunk_document
 from rag.embeddings import embed_texts
 from rag.vector_store import upsert_chunks, count_documents
@@ -33,12 +33,10 @@ def main():
             print(f"⚠️  SKIP — file missing: {doc_path}")
             continue
 
-        if src["filename"].endswith(".pdf"):
-            pages = extract_pdf_with_metadata(str(doc_path), src)
-        elif src["filename"].endswith(".txt"):
-            pages = extract_txt_with_metadata(str(doc_path), src)
-        else:
-            print(f"⚠️  SKIP — unsupported file type: {doc_path}")
+        try:
+            pages = extract_document(str(doc_path), src)
+        except ValueError as e:
+            print(f"⚠️  SKIP — {e}")
             continue
 
         chunks = chunk_document(pages)

@@ -3,9 +3,9 @@
 def format_citation(source: str, page: int, document_type: str = "annual_report") -> str:
     """Trả về dạng '[EVN Annual Report 2024-2025, p.9]' hoặc '[Chỉ thị 20/CT-TTg, Mục 5]'."""
     if document_type == "policy_directive":
-        if page == 0:
-            return f"[{source}]"
-        return f"[{source}, Mục {page}]"
+        return f"[{source}]" if page == 0 else f"[{source}, Mục {page}]"
+    if document_type == "markdown_doc":
+        return f"[{source}]" if page == 0 else f"[{source}, phần {page}]"
     return f"[{source}, p.{page}]"
 
 

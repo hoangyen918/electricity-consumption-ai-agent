@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-from rag.pdf_extractor import extract_pdf_with_metadata
+from rag.extractors import extract_document
 from rag.chunker import chunk_document
 
 
@@ -24,16 +24,16 @@ def main():
     total_tokens = 0
 
     for src in sources:
-        pdf_path = Path("kb/raw") / src["filename"]
+        doc_path = Path("kb/raw") / src["filename"]
         print(f"\n{'='*60}")
         print(f"Source: {src['title']}")
-        print(f"File: {pdf_path}")
+        print(f"File: {doc_path}")
 
-        if not pdf_path.exists():
-            print(f"  ⚠️  FILE MISSING — skip. Tải PDF vào kb/raw/{src['filename']} trước.")
+        if not doc_path.exists():
+            print(f"  ⚠️  FILE MISSING — skip. Tải file vào kb/raw/{src['filename']} trước.")
             continue
 
-        pages = extract_pdf_with_metadata(str(pdf_path), src)
+        pages = extract_document(str(doc_path), src)
         chunks = chunk_document(pages)
 
         doc_tokens = sum(c["token_count"] for c in chunks)
