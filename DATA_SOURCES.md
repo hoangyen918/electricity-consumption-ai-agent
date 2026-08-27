@@ -222,3 +222,22 @@ over-verification pattern, not the peak-date misidentification issue above,
 and was not addressed in this fix to avoid an untested prompt change that
 could reduce the agent's appropriate caution in other contexts. Left as a
 known limitation for V2 consideration.
+
+
+## Security Testing Note
+
+Prompt injection tests (tests/test_security.py) inject malicious content
+directly into the message history with role="user" to simulate what the
+agent would see after a knowledge-base retrieval, rather than exercising the
+full path (agent decides to call search_knowledge_base → Chroma returns the
+malicious chunk → content arrives as role="tool" in the message history).
+This is a reasonable approximation given the system prompt's defense
+instruction applies to "content retrieved via search_knowledge_base"
+regardless of the message role it arrives under, but it is a narrower test
+than a full end-to-end scenario where the agent autonomously retrieves the
+malicious document. Both tests passed, with the model explicitly noting it
+was disregarding the injected instruction — a stronger result than the
+minimum bar of simply not complying. A true end-to-end injection test
+(poisoning the actual vector store temporarily and letting the agent
+autonomously retrieve it via a real question) is a more rigorous version
+of this test, left as potential future hardening given time constraints.
