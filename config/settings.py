@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     rag_top_k: int = 10
     app_referer: str = "http://localhost:8501"
     app_title: str = "Electricity Consumption AI Agent"
-
+    tei_embedding_url: str = ""
+    tei_reranker_url: str = ""
+    tei_api_key: str = ""
 
 SETTINGS = Settings()

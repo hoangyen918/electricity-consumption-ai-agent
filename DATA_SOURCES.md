@@ -129,6 +129,16 @@ primary Knowledge QA test questions:
 | Total power production and purchase, 2023 | 271.68 billion kWh (+3.68% YoY) | EVN Annual Report 2022-2023, p.10 |
 | Power loss rate                           | 6.05% (improved 0.2pp)          | EVN Annual Report 2022-2023, p.10 |
 
+**Update — conflicting figures discovered between EVN reports (found during M11 evaluation):**
+EVN Annual Report 2024-2025, page 7, states 'Total power production and purchase' for 2023 as
+280,814 million kWh (280.814 billion kWh) — this conflicts with the 271.68 billion kWh figure
+for the same metric and year sourced from EVN Annual Report 2022-2023, page 10 (used above).
+Both figures are genuinely present in their respective official PDFs (verified, not a
+retrieval or hallucination artifact) — the discrepancy likely reflects a preliminary estimate
+in the earlier report being revised in the later one. The system prompt now instructs the
+agent to prefer the most recently published report's figures when such conflicts arise, and
+to flag the discrepancy transparently rather than silently choosing one value.
+
 ### Multi-domain corpus vocabulary collision (added when policy directive KB was introduced)
 
 Adding Chỉ thị 20/CT-TTg (policy directive on electricity saving) as a third
