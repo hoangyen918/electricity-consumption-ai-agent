@@ -135,3 +135,65 @@ def test_max_iterations_never_exceeded(agent):
     from config.settings import SETTINGS
     result = agent.ask("Dataset có bao nhiêu dòng?")
     assert result["iterations"] <= SETTINGS.max_agent_iterations
+
+
+def test_empty_content_retry_recovers(monkeypatch):
+    """Giả lập provider trả content rỗng lần đầu, đúng nội dung lần 2 — xác nhận retry hoạt động."""
+    from unittest.mock import MagicMock
+    import agent.loop as loop_module
+
+    call_count = {"n": 0}
+
+    def fake_chat_completion(messages, tools=None, tool_choice="auto"):
+        call_count["n"] += 1
+        response = MagicMock()
+        response.usage = MagicMock(prompt_tokens=100, completion_tokens=10)
+        message = MagicMock()
+        message.tool_calls = None
+        if call_count["n"] == 1:
+            message.content = ""  # lần đầu giả lập provider trả rỗng
+        else:
+            message.content = "Câu trả lời hợp lệ."
+        response.choices = [MagicMock(message=message)]
+        return response
+
+    monkeypatch.setattr(loop_module, "chat_completion", fake_chat_completion)
+
+    from tools.dataset_manager import DatasetManager
+    manager = DatasetManager()
+    manager.load_csv("data/sample/tetouan_sample.csv")
+
+    messages = [{"role": "user", "content": "test"}]
+    result = loop_module.run_agent_loop(messages, manager)
+
+    assert result["answer"] == "Câu trả lời hợp lệ."
+    assert result["empty_content_retries"] == 1
+    assert call_count["n"] == 2
+
+
+def test_empty_content_retry_exhausted_returns_fallback(monkeypatch):
+    """Giả lập provider LUÔN trả rỗng — xác nhận trả fallback message, không phải None/rỗng."""
+    from unittest.mock import MagicMock
+    import agent.loop as loop_module
+
+    def always_empty_chat_completion(messages, tools=None, tool_choice="auto"):
+        response = MagicMock()
+        response.usage = MagicMock(prompt_tokens=100, completion_tokens=5)
+        message = MagicMock()
+        message.tool_calls = None
+        message.content = ""
+        response.choices = [MagicMock(message=message)]
+        return response
+
+    monkeypatch.setattr(loop_module, "chat_completion", always_empty_chat_completion)
+
+    from tools.dataset_manager import DatasetManager
+    manager = DatasetManager()
+    manager.load_csv("data/sample/tetouan_sample.csv")
+
+    messages = [{"role": "user", "content": "test"}]
+    result = loop_module.run_agent_loop(messages, manager)
+
+    assert result["answer"]  # không được rỗng/None
+    assert "sự cố" in result["answer"].lower() or "xin lỗi" in result["answer"].lower()
+    assert result["empty_content_retries"] == 2  # đã thử hết EMPTY_CONTENT_MAX_RETRIES

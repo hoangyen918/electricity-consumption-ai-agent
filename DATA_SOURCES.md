@@ -91,6 +91,53 @@ the 2 skipped pages in the 2022-2023 report contain no extractable text layer
 
 Total corpus after chunking: 48 chunks, 21,780 tokens across both documents.
 
+## CRITICAL BUG FOUND AND FIXED — date-range filtering silently excluded last day's data
+
+**Discovered:** M12, during final eval investigation. **Present since:** M2 (undetected for the
+entire project duration until now).
+
+**Root cause:** `aggregate_metric`, `compare_periods`, and `calculate_correlation` all filtered
+date ranges using `datetime <= pd.to_datetime(end_date)`, where `pd.to_datetime()` defaults to
+00:00:00. This silently kept only the single midnight row of the end date and discarded the
+remaining 143 ten-minute readings of that day — a systematic undercount affecting every
+date-range query in the project (e.g., "tháng 7" queries used 4,321 rows instead of the correct
+4,464; single-day queries like Gate 2's "temperature on peak day" used only 1 row instead of a
+true 144-row daily average).
+
+**Why it went undetected:** All prior tests checked tool selection and answer plausibility, not
+exact numeric correctness against an independently computed ground truth — so a systematically-
+biased-but-plausible-looking number passed every check for the project's full duration.
+
+**Fix:** changed the upper bound to an exclusive comparison against the start of the next day
+(`datetime < end_date + 1 day`), correctly including the full end date regardless of data
+granularity. Added explicit regression tests (`test_aggregate_metric_end_date_includes_full_last_day`,
+`test_aggregate_metric_multi_day_range_includes_all_days`) asserting exact expected row counts,
+so a recurrence would be caught immediately rather than silently passing plausibility checks.
+
+**Lesson:** plausibility-based test assertions ("answer contains a number", "correct tool was
+called") do not catch systematic numeric bias — only assertions against an independently
+verified exact expected value can. This is a genuine limitation of the eval design used
+throughout most of this project's development.
+
+## Provider glitch mitigation — empty content retry
+
+**Discovered:** M12, during eval failure investigation. Across 106 agent calls (2 full eval
+runs of 53 cases), 7 calls (~6.6%) returned a "successful" API response with no tool_calls
+and empty/None content — the LLM equivalent of a silent no-op. Targeted reproduction (15
+repeated calls on the 3 specific questions that exhibited this) failed to reproduce it
+(0/15), and the affected questions differed between the two eval runs, indicating a
+transient, content-independent glitch — most likely provider-side (OpenRouter routes to
+multiple backend providers per request; occasional malformed/empty responses from one
+provider are plausible) rather than a logic bug tied to specific prompts.
+
+**Fix:** added a retry specifically for this case (empty content + no tool_calls despite a
+"successful" API response), separate from MAX_AGENT_ITERATIONS (which governs the tool-calling
+loop, not provider-response recovery). Up to 2 retries; if still empty after retries, the
+agent returns an explicit fallback message rather than surfacing an empty/None answer to the
+user. Verified via deterministic mocked tests (test_empty_content_retry_recovers,
+test_empty_content_retry_exhausted_returns_fallback) since the real glitch cannot be reliably
+reproduced on demand.
+
 ## Known Limitations — Retrieval Quality
 
 ### Cross-lingual retrieval gap
@@ -247,7 +294,6 @@ M11 (evals/run_evals.py), which should run each test case multiple times where
 feasible rather than treating a single pass as conclusive, especially for
 gate-critical behaviors like tool-selection compliance.
 
-
 ### Tool selection — peak-date reasoning (fixed) and residual over-verification pattern
 
 An earlier version of the system prompt caused the agent to occasionally infer
@@ -278,7 +324,6 @@ and was not addressed in this fix to avoid an untested prompt change that
 could reduce the agent's appropriate caution in other contexts. Left as a
 known limitation for V2 consideration.
 
-
 ## Security Testing Note
 
 Prompt injection tests (tests/test_security.py) inject malicious content
@@ -296,3 +341,32 @@ minimum bar of simply not complying. A true end-to-end injection test
 (poisoning the actual vector store temporarily and letting the agent
 autonomously retrieve it via a real question) is a more rigorous version
 of this test, left as potential future hardening given time constraints.
+
+
+## Known limitation — search-until-exhausted pattern (not fixed, documented for V2)
+
+Final evaluation (53 cases, 94.3% pass) surfaced 2 cases (both_007, parametric_001) sharing
+an identical root cause: the agent calls search_knowledge_base repeatedly (5 times, with
+varied queries) without ever concluding, exhausting MAX_AGENT_ITERATIONS before producing
+an answer — even though both_007's correct answer required only 1 lookup + 1 calculate, and
+parametric_001's correct behavior (refuse — the year isn't in the KB) was reached in content
+but not before hitting the iteration limit.
+
+This is the third observed instance of this pattern in the project (see also the M8 finding
+on group_metric-based over-verification), indicating a systemic gap rather than isolated
+noise: the agent has no explicit guidance on when to stop searching and commit to an answer
+(or a refusal) versus trying another query phrasing.
+
+A targeted fix (a system prompt rule capping search_knowledge_base retries with varied
+phrasing, e.g. "after 2-3 search attempts, answer with the best available evidence or refuse
+clearly, rather than continuing to reformulate the query") was considered but deliberately
+NOT applied at this stage of the project, given the proximity to the final deliverable
+deadline and the risk that an imprecise prompt change could cause the agent to give up too
+early on legitimately multi-step questions. Documented here as a concrete, well-understood
+V2 improvement rather than an unknown gap.
+
+kb_001 also failed in this run (content_ok) but for an unrelated reason: the agent correctly
+cited 99.6% (2023) from the trend table rather than the calibrated ground-truth value 99.74%
+(2024) — both are genuine figures from the same table in EVN Annual Report 2024-2025, page 9;
+this is an eval-calibration ambiguity (which year the question implicitly asks about), not an
+agent or retrieval error.

@@ -43,6 +43,7 @@ def log_interaction(
             for t in result["trace"]
         ],
         "usage_per_call": result["usage_per_call"],
+        "empty_content_retries": result.get("empty_content_retries", 0),
         "total_latency_ms": round(total_latency_ms, 1),
         "estimated_cost_usd": round(total_cost_usd, 8),
         "answer_preview": (result["answer"][:200] if result["answer"] else None),

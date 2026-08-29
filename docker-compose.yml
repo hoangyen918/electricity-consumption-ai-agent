@@ -6,3 +6,4 @@ services:
     volumes:
       - ./storage/chroma:/app/storage/chroma
       - ./logs:/app/logs
+      - ./kb/raw:/app/kb/raw

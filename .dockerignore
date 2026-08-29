@@ -1,0 +1,12 @@
+.venv/
+.git/
+__pycache__/
+*.pyc
+.env
+logs/*
+storage/chroma/*
+.pytest_cache/
+evals/results/*
+data/raw/*
+data/processed/*
+kb/raw/*

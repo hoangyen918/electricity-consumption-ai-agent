@@ -81,10 +81,10 @@ def aggregate_metric(
                 filtered = filtered[filtered["datetime"] >= start_ts]
             if end_date is not None:
                 try:
-                    end_ts = pd.to_datetime(end_date)
+                    end_ts = pd.to_datetime(end_date) + pd.Timedelta(days=1)
                 except (ValueError, TypeError):
                     return failure(f"Invalid end_date format: '{end_date}'")
-                filtered = filtered[filtered["datetime"] <= end_ts]
+                filtered = filtered[filtered["datetime"] < end_ts]
 
         if len(filtered) == 0:
             return failure(
@@ -199,10 +199,10 @@ def compare_periods(
         def _filtered_period(start, end, label):
             try:
                 start_ts = pd.to_datetime(start)
-                end_ts = pd.to_datetime(end)
+                end_ts = pd.to_datetime(end) + pd.Timedelta(days=1)
             except (ValueError, TypeError):
                 return None, f"Invalid date format for {label}: start='{start}', end='{end}'"
-            subset = df[(df["datetime"] >= start_ts) & (df["datetime"] <= end_ts)]
+            subset = df[(df["datetime"] >= start_ts) & (df["datetime"] < end_ts)]
             if len(subset) == 0:
                 return None, f"No rows found for {label} (start={start}, end={end})."
             return subset, None
@@ -284,10 +284,10 @@ def calculate_correlation(
                 filtered = filtered[filtered["datetime"] >= start_ts]
             if end_date is not None:
                 try:
-                    end_ts = pd.to_datetime(end_date)
+                    end_ts = pd.to_datetime(end_date) + pd.Timedelta(days=1)
                 except (ValueError, TypeError):
                     return failure(f"Invalid end_date format: '{end_date}'")
-                filtered = filtered[filtered["datetime"] <= end_ts]
+                filtered = filtered[filtered["datetime"] < end_ts]
 
         if len(filtered) == 0:
             return failure(

@@ -13,12 +13,24 @@ from tools.dataframe_tools import (
 from tools.dataset_manager import DatasetManager
 
 SAMPLE_PATH = str(Path(__file__).resolve().parent.parent / "data" / "sample" / "tetouan_sample.csv")
+PROCESSED_PATH = str(Path(__file__).resolve().parent.parent / "data" / "processed" / "tetouan_clean.csv")
 
 
 @pytest.fixture(scope="module")
 def manager():
     m = DatasetManager()
     m.load_csv(SAMPLE_PATH)
+    return m
+
+
+@pytest.fixture(scope="module")
+def full_manager():
+    """
+    Dataset đầy đủ cả năm — cần cho regression test end_date, vì SAMPLE_PATH chỉ có
+    7 ngày đầu (2017-01-01 đến 2017-01-07), không đủ để test khoảng tháng 7.
+    """
+    m = DatasetManager()
+    m.load_csv(PROCESSED_PATH)
     return m
 
 
@@ -217,3 +229,31 @@ def test_calculate_correlation_invalid_column(manager):
 
     assert result["ok"] is False
     assert "not_a_real_column" in result["error"]
+
+
+# --- regression: end_date phải bao gồm TOÀN BỘ ngày cuối, không chỉ đúng lúc 00:00 ---
+
+
+def test_aggregate_metric_end_date_includes_full_last_day(manager):
+    """
+    Regression test cho bug đã phát hiện: end_date phải bao gồm TOÀN BỘ ngày cuối
+    (144 dòng/ngày với dữ liệu 10 phút/lần), không chỉ đúng 1 dòng lúc 00:00.
+    """
+    result = aggregate_metric(manager, "zone_1_consumption", "count",
+                               start_date="2017-01-01", end_date="2017-01-01")
+    assert result["ok"] is True
+    assert result["data"]["rows_used"] == 144, (
+        f"Ngày 2017-01-01 phải có đủ 144 dòng (10 phút/lần), "
+        f"chỉ thấy {result['data']['rows_used']} — bug end_date filtering đã tái diễn"
+    )
+
+
+def test_aggregate_metric_multi_day_range_includes_all_days(full_manager):
+    """Khoảng nhiều ngày phải bao gồm đủ ngày cuối, không thiếu 143 dòng như bug cũ."""
+    result = aggregate_metric(full_manager, "zone_1_consumption", "count",
+                               start_date="2017-07-01", end_date="2017-07-31")
+    assert result["ok"] is True
+    assert result["data"]["rows_used"] == 31 * 144, (
+        f"Tháng 7/2017 (31 ngày x 144 dòng/ngày = 4464) phải đủ, "
+        f"chỉ thấy {result['data']['rows_used']}"
+    )

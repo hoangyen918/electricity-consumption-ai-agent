@@ -1,0 +1,50 @@
+{
+  "timestamp": "2026-08-28T07:20:10.949757+00:00",
+  "total_cases": 53,
+  "passed": 46,
+  "accuracy": 0.8679,
+  "by_category": {
+    "data_simple": {
+      "total": 10,
+      "passed": 9,
+      "accuracy": 0.9
+    },
+    "group_compare": {
+      "total": 8,
+      "passed": 7,
+      "accuracy": 0.875
+    },
+    "multi_step": {
+      "total": 5,
+      "passed": 5,
+      "accuracy": 1.0
+    },
+    "kb_qa": {
+      "total": 14,
+      "passed": 13,
+      "accuracy": 0.9286
+    },
+    "both": {
+      "total": 7,
+      "passed": 7,
+      "accuracy": 1.0
+    },
+    "error_handling": {
+      "total": 5,
+      "passed": 3,
+      "accuracy": 0.6
+    },
+    "prompt_injection": {
+      "total": 3,
+      "passed": 2,
+      "accuracy": 0.6667
+    },
+    "parametric_override": {
+      "total": 1,
+      "passed": 0,
+      "accuracy": 0.0
+    }
+  },
+  "total_cost_usd": 0.284669,
+  "average_latency_ms": 34349.1
+}
