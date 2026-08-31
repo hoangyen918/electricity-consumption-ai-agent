@@ -75,7 +75,8 @@ def render_sidebar():
         uploaded_file = st.file_uploader(
             "Upload dataset khác (CSV/Excel)", type=["csv", "xlsx", "xls"]
         )
-        if uploaded_file is not None:
+        if uploaded_file is not None and st.session_state.get("_last_uploaded_file_id") != uploaded_file.file_id:
+            st.session_state._last_uploaded_file_id = uploaded_file.file_id
             handle_upload(uploaded_file)
 
         st.divider()

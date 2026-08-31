@@ -2,6 +2,71 @@ from pathlib import Path
 
 import pandas as pd
 
+DATETIME_DERIVED_COLUMNS = ["year", "month", "day", "hour", "weekday", "date"]
+MIN_DATETIME_PARSE_RATE = 0.95
+
+
+def derive_time_columns(df: pd.DataFrame) -> tuple[pd.DataFrame, str | None]:
+    """
+    Tự động phát hiện cột datetime trong dataframe (KHÔNG hard-code tên cột cụ thể
+    của Tetouan — phải chạy được trên CSV lạ với tên cột bất kỳ) và derive các cột
+    year/month/day/hour/weekday/date mà group_metric() cần có sẵn (group_metric
+    không tự tính lại từ datetime tại runtime).
+
+    Không rename/xóa bất kỳ cột giá trị gốc nào. Nếu không cột nào đạt ngưỡng
+    MIN_DATETIME_PARSE_RATE, trả về df nguyên vẹn, không raise — dataset không có
+    timestamp là hợp lệ, các câu hỏi theo group_by/start_date sẽ tự fail qua
+    failure() sẵn có trong dataframe_tools.py.
+
+    Trả về (df đã (có thể) thêm cột, tên cột gốc được chọn làm nguồn datetime hoặc None).
+    """
+    df = df.copy()
+    source_column: str | None = None
+
+    if "datetime" in df.columns:
+        parsed = pd.to_datetime(df["datetime"], errors="coerce")
+        non_null = df["datetime"].notna().sum()
+        if non_null > 0 and parsed.notna().sum() / non_null >= MIN_DATETIME_PARSE_RATE:
+            source_column = "datetime"
+            df["datetime"] = parsed
+
+    if source_column is None:
+        best_col = None
+        best_rate = 0.0
+        best_parsed = None
+        for col in df.columns:
+            if col == "datetime" or pd.api.types.is_numeric_dtype(df[col]):
+                continue
+            non_null = df[col].notna().sum()
+            if non_null == 0:
+                continue
+            parsed = pd.to_datetime(df[col], errors="coerce")
+            rate = parsed.notna().sum() / non_null
+            if rate > best_rate:
+                best_rate = rate
+                best_col = col
+                best_parsed = parsed
+        if best_col is not None and best_rate >= MIN_DATETIME_PARSE_RATE:
+            source_column = best_col
+            df["datetime"] = best_parsed
+
+    if source_column is not None:
+        dt = df["datetime"]
+        if "year" not in df.columns:
+            df["year"] = dt.dt.year
+        if "month" not in df.columns:
+            df["month"] = dt.dt.month
+        if "day" not in df.columns:
+            df["day"] = dt.dt.day
+        if "hour" not in df.columns:
+            df["hour"] = dt.dt.hour
+        if "weekday" not in df.columns:
+            df["weekday"] = dt.dt.weekday
+        if "date" not in df.columns:
+            df["date"] = dt.dt.date
+
+    return df, source_column
+
 
 class DatasetManager:
     """Giữ 1 dataframe duy nhất trong memory cho toàn bộ session."""
@@ -9,13 +74,14 @@ class DatasetManager:
     def __init__(self):
         self._df: pd.DataFrame | None = None
         self._source_path: str | None = None
+        self._datetime_source_column: str | None = None
 
     def load_csv(self, path: str) -> None:
         df = pd.read_csv(path)
-        if "datetime" in df.columns:
-            df["datetime"] = pd.to_datetime(df["datetime"])
+        df, source_column = derive_time_columns(df)
         self._df = df
         self._source_path = path
+        self._datetime_source_column = source_column
 
     def load_excel(self, path: str, sheet_name=0) -> None:
         """
@@ -23,10 +89,10 @@ class DatasetManager:
         sheet_name có thể là tên sheet (str) hoặc index (int).
         """
         df = pd.read_excel(path, sheet_name=sheet_name)
-        if "datetime" in df.columns:
-            df["datetime"] = pd.to_datetime(df["datetime"])
+        df, source_column = derive_time_columns(df)
         self._df = df
         self._source_path = path
+        self._datetime_source_column = source_column
 
     def load_file(self, path: str, sheet_name=0) -> None:
         """
@@ -56,3 +122,10 @@ class DatasetManager:
     def get_numeric_columns(self) -> list[str]:
         df = self.get_dataframe()
         return df.select_dtypes(include="number").columns.tolist()
+
+    def get_datetime_source_column(self) -> str | None:
+        """
+        Tên cột gốc được tự động chọn làm nguồn datetime (xem derive_time_columns).
+        None nếu không có cột nào đạt ngưỡng parse hoặc chưa load dataset nào.
+        """
+        return self._datetime_source_column

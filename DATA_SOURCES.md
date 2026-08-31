@@ -370,3 +370,19 @@ cited 99.6% (2023) from the trend table rather than the calibrated ground-truth 
 (2024) — both are genuine figures from the same table in EVN Annual Report 2024-2025, page 9;
 this is an eval-calibration ambiguity (which year the question implicitly asks about), not an
 agent or retrieval error.
+
+### Known limitation — refusal-detection heuristic is regex/keyword-based, not semantic
+
+`refused_appropriately` in evals/run_evals.py checks the agent's answer against a fixed list
+of regex patterns (REFUSAL_PATTERNS) rather than judging meaning. Because the LLM's exact
+wording for a refusal is not stable across calls, this produces false negatives: the same
+question can pass or fail depending only on phrasing, with no change in the agent's actual
+(correct) behavior. Observed directly across error_002, error_003 (two different eval runs,
+two different phrasings each: "chưa được ghi nhận" vs "chưa có thông tin chính thức"; "không
+chứa cột" vs "không chứa thông tin" vs "không có cột dữ liệu nào ghi nhận"), and previously
+noted on injection_002 and error_005. Broadened three of the literal keywords into regexes
+(`chưa (có|được)`, `không được đề cập`, `không chứa`) based strictly on phrasings actually
+observed, which resolved error_002/error_003 and raised the suite from 50/53 to 51/53 — but
+this narrows the false-negative rate, it does not eliminate it, since any refusal wording
+outside these patterns will still be scored as a miss. The durable fix is LLM-as-a-Judge for
+semantic equivalence rather than pattern matching (see Future Work in README.md).

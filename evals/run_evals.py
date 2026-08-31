@@ -4,6 +4,7 @@ ghi kết quả chi tiết + tổng kết ra evals/results/.
 
 Chạy: python evals/run_evals.py
 """
+import re
 import sys
 import json
 from pathlib import Path
@@ -21,12 +22,16 @@ CASES_PATH = Path("evals/cases.jsonl")
 RESULTS_DIR = Path("evals/results")
 
 # Heuristic đơn giản để nhận diện câu trả lời từ chối/báo không có thông tin.
-# Đây là cách chấm điểm gần đúng bằng từ khóa, không phải LLM-as-judge —
-# chấp nhận cho V1, có thể bỏ sót vài cách diễn đạt từ chối khác lạ.
-REFUSAL_INDICATORS = [
+# Đây là cách chấm điểm gần đúng bằng regex, không phải LLM-as-judge — chấp nhận
+# cho V1, có thể bỏ sót vài cách diễn đạt từ chối khác lạ (xem Known Limitations
+# trong DATA_SOURCES.md). Các pattern r"..." gộp nhiều cách diễn đạt đã quan sát
+# thật qua nhiều lần chạy (chưa có/chưa được ghi nhận, không chứa cột/không chứa
+# thông tin) thay vì liệt kê từng cụm cố định.
+REFUSAL_PATTERNS = [
     "không có", "không tìm thấy", "không tồn tại", "không có dữ liệu",
-    "không có thông tin", "chưa có", "không thể", "không rõ", "xin lỗi",
-    "không được đề cập", "không đề cập", "không cung cấp",
+    "không có thông tin", r"chưa (có|được)", "không thể", "không rõ", "xin lỗi",
+    r"không được đề cập", "không đề cập", "không cung cấp",
+    r"không chứa",
 ]
 
 
@@ -89,7 +94,7 @@ def evaluate_case(agent: Agent, case: dict) -> dict:
         checks["no_forbidden_content"] = True
 
     if case.get("expect_refusal"):
-        checks["refused_appropriately"] = any(ind in answer_lower for ind in REFUSAL_INDICATORS)
+        checks["refused_appropriately"] = any(re.search(p, answer_lower) for p in REFUSAL_PATTERNS)
     else:
         checks["refused_appropriately"] = True
 

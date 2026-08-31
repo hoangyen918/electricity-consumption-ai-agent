@@ -4,6 +4,7 @@ import pandas as pd
 import pytest
 
 from tools.dataset_manager import DatasetManager
+from tools.dataframe_tools import group_metric
 
 SAMPLE_PATH = str(Path(__file__).resolve().parent.parent / "data" / "sample" / "tetouan_sample.csv")
 
@@ -73,3 +74,36 @@ def test_load_excel_reads_correctly(tmp_path):
     assert m.is_loaded()
     assert len(m.get_dataframe()) == len(df)
     assert "zone_1_consumption" in m.get_columns()
+
+
+def test_upload_of_raw_tetouan_style_csv_supports_group_by_month(tmp_path):
+    """
+    Regression test cho bug đã phát hiện: dataset upload qua UI (chưa qua
+    scripts/prepare_data.py, giữ nguyên tên cột gốc kiểu 'DateTime', 'Zone 1 Power
+    Consumption') phải vẫn dùng được group_metric(group_by='month') nhờ
+    derive_time_columns() tự phát hiện cột datetime và derive cột 'month' -
+    KHÔNG rename theo RENAME_MAP dành riêng cho Tetouan, cột giá trị vẫn dùng
+    đúng tên gốc như trong dataset.
+    """
+    raw_csv = tmp_path / "tetouan_raw_like.csv"
+    rows = []
+    for month in range(1, 13):
+        for day in (1, 15):
+            rows.append(f"2017-{month:02d}-{day:02d} 10:00:00,20.0,55.0,{month}00.0")
+    content = "DateTime,Temperature,Humidity,Zone 1 Power Consumption\n" + "\n".join(rows) + "\n"
+    raw_csv.write_text(content, encoding="utf-8")
+
+    manager = DatasetManager()
+    manager.load_csv(str(raw_csv))
+
+    assert manager.get_datetime_source_column() == "DateTime"
+    assert "Zone 1 Power Consumption" in manager.get_columns()
+
+    result = group_metric(
+        manager, column="Zone 1 Power Consumption", aggregation="mean", group_by="month"
+    )
+
+    assert result["ok"] is True, result.get("error")
+    assert len(result["data"]["values"]) == 12
+    # month=7 -> giá trị Zone 1 Power Consumption luôn là 700.0 theo dữ liệu tạo ở trên
+    assert result["data"]["values"]["7"] == pytest.approx(700.0)
