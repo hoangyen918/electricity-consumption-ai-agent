@@ -1,12 +1,15 @@
 """Quản lý danh sách nguồn KB — thêm/liệt kê/xóa. Dùng chung cho UI và script."""
 import json
 import re
+import time
 from pathlib import Path
 
+from config.settings import SETTINGS
 from rag.extractors import extract_document
 from rag.chunker import chunk_document
 from rag.embeddings import embed_texts
 from rag.vector_store import upsert_chunks, get_collection
+from services.cost_tracker import calculate_embedding_cost
 
 SOURCES_PATH = Path("kb/sources.json")
 RAW_DIR = Path("kb/raw")
@@ -59,6 +62,8 @@ def add_document(
     cập nhật kb/sources.json. year_start/year_end/language dùng chuỗi rỗng mặc định, KHÔNG
     dùng None vì ChromaDB không chấp nhận None trong metadata (sẽ crash lúc upsert).
     """
+    start_time = time.perf_counter()
+
     ext = Path(original_filename).suffix.lower()
     if ext not in SUPPORTED_EXTENSIONS:
         raise ValueError(
@@ -66,12 +71,22 @@ def add_document(
         )
 
     source_id = _slugify(Path(original_filename).stem)
-    existing_ids = {s["id"] for s in load_sources()}
-    if source_id in existing_ids:
-        suffix = 2
-        while f"{source_id}_{suffix}" in existing_ids:
-            suffix += 1
-        source_id = f"{source_id}_{suffix}"
+    existing_sources = load_sources()
+
+    # (a) source_id trùng chính xác — cùng filename từng upload trước đó (slugify ra cùng id).
+    duplicate = next((s for s in existing_sources if s["id"] == source_id), None)
+    # (b) original_filename khớp field "filename" của 1 entry có sẵn — bắt trường hợp tài liệu
+    # đã được curate sẵn (ví dụ qua scripts/ingest_kb.py với id đặt tay như "iea_weo_2021",
+    # filename gốc "WorldEnergyOutlook2021.pdf") nhưng user upload lại đúng file đó qua UI,
+    # sinh ra source_id khác (do slugify) — không bị (a) bắt vì id khác nhau.
+    if duplicate is None:
+        duplicate = next((s for s in existing_sources if s["filename"] == original_filename), None)
+
+    if duplicate is not None:
+        raise ValueError(
+            f"Tài liệu '{original_filename}' đã tồn tại trong kho (source_id: {duplicate['id']}). "
+            "Vui lòng xóa bản cũ trước khi nạp lại."
+        )
 
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     saved_filename = f"{source_id}{ext}"
@@ -96,14 +111,31 @@ def add_document(
         raise ValueError("Không trích xuất được nội dung nào từ file này (file rỗng hoặc lỗi định dạng).")
 
     texts = [c["text"] for c in chunks]
-    embeddings = embed_texts(texts)
+    usage_accumulator: list[int] = []
+    embeddings = embed_texts(texts, usage_accumulator=usage_accumulator)
     upsert_chunks(chunks, embeddings)
 
     sources = load_sources()
     sources.append(source_metadata)
     save_sources(sources)
 
-    return {"source_id": source_id, "chunk_count": len(chunks)}
+    duration_seconds = time.perf_counter() - start_time
+    token_count = sum(usage_accumulator)
+    cost_usd = calculate_embedding_cost(SETTINGS.embedding_model, token_count)
+
+    print(
+        f"[INGEST] file={original_filename} chunks={len(chunks)} tokens={token_count} "
+        f"cost=${cost_usd:.6f} duration={duration_seconds:.2f}s",
+        flush=True,
+    )
+
+    return {
+        "source_id": source_id,
+        "chunk_count": len(chunks),
+        "token_count": token_count,
+        "cost_usd": cost_usd,
+        "duration_seconds": duration_seconds,
+    }
 
 
 def delete_document(source_id: str) -> int:

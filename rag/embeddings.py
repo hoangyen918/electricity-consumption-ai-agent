@@ -13,8 +13,13 @@ MAX_RETRIES = 3
 RETRY_BACKOFF_SECONDS = 2  # nhân đôi mỗi lần retry: 2s, 4s, 8s
 
 
-def _embed_batch(texts: list[str]) -> list[list[float]]:
-    """Gọi API cho 1 batch, có retry với exponential backoff."""
+def _embed_batch(texts: list[str], usage_accumulator: list[int] | None = None) -> list[list[float]]:
+    """Gọi API cho 1 batch, có retry với exponential backoff.
+
+    usage_accumulator: nếu truyền vào, token count của LẦN GỌI THÀNH CÔNG được append
+    vào đây (không cộng dồn các lần retry fail trước đó, vì append nằm ngay trước
+    return trong nhánh try — chỉ chạy tới được khi request thành công).
+    """
     last_error = None
     for attempt in range(MAX_RETRIES):
         try:
@@ -26,6 +31,8 @@ def _embed_batch(texts: list[str]) -> list[list[float]]:
                     "X-Title": SETTINGS.app_title,
                 },
             )
+            if usage_accumulator is not None and response.usage is not None:
+                usage_accumulator.append(response.usage.total_tokens)
             return [item.embedding for item in response.data]
         except Exception as e:
             last_error = e
@@ -37,10 +44,15 @@ def _embed_batch(texts: list[str]) -> list[list[float]]:
     raise RuntimeError(f"Embedding failed after {MAX_RETRIES} attempts: {last_error}")
 
 
-def embed_texts(texts: list[str], batch_size: int = BATCH_SIZE) -> list[list[float]]:
+def embed_texts(
+    texts: list[str], batch_size: int = BATCH_SIZE, usage_accumulator: list[int] | None = None
+) -> list[list[float]]:
     """
     Embed danh sách text, tự động chia batch để tránh request quá lớn.
     Trả về list embedding vectors, CÙNG THỨ TỰ với input texts.
+
+    usage_accumulator: nếu truyền vào, token count thật (từ response.usage) của mỗi
+    batch được append vào đây — tổng lại (sum) để có total token đã dùng.
     """
     if not texts:
         return []
@@ -49,7 +61,10 @@ def embed_texts(texts: list[str], batch_size: int = BATCH_SIZE) -> list[list[flo
     for i in range(0, len(texts), batch_size):
         batch = texts[i:i + batch_size]
         print(f"  Embedding batch {i // batch_size + 1} ({len(batch)} texts)...")
-        embeddings = _embed_batch(batch)
+        if usage_accumulator is not None:
+            embeddings = _embed_batch(batch, usage_accumulator=usage_accumulator)
+        else:
+            embeddings = _embed_batch(batch)
         all_embeddings.extend(embeddings)
 
     return all_embeddings

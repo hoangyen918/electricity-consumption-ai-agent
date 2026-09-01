@@ -88,6 +88,13 @@ def render_sidebar():
         except Exception:
             st.error("Chưa kết nối được ChromaDB. Chạy `python scripts/ingest_kb.py` trước.")
 
+        if "last_kb_ingest" in st.session_state:
+            info = st.session_state["last_kb_ingest"]
+            st.caption(
+                f"Ingest gần nhất: {info['chunk_count']} chunks · {info['token_count']} tokens · "
+                f"${info['cost_usd']:.6f}"
+            )
+
         st.write("**Tài liệu đã nạp:**")
         try:
             from rag.kb_manager import list_sources_with_chunk_counts, delete_document, add_document
@@ -117,6 +124,7 @@ def render_sidebar():
                         title=kb_title,
                     )
                     st.success(f"Đã nạp '{kb_title}': {result['chunk_count']} đoạn.")
+                    st.session_state["last_kb_ingest"] = result
                     st.rerun()
                 except Exception as e:
                     st.error(f"Lỗi khi nạp tài liệu: {e}")

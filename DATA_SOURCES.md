@@ -386,3 +386,17 @@ observed, which resolved error_002/error_003 and raised the suite from 50/53 to 
 this narrows the false-negative rate, it does not eliminate it, since any refusal wording
 outside these patterns will still be scored as a miss. The durable fix is LLM-as-a-Judge for
 semantic equivalence rather than pattern matching (see Future Work in README.md).
+
+### Known limitation — tests/test_kb_manager.py does not isolate ChromaDB
+
+The `isolate_kb` autouse fixture only monkeypatches `SOURCES_PATH`/`RAW_DIR` to a tmp_path;
+`rag/vector_store.py`'s `get_collection()` is never overridden, so every test that calls
+`add_document()` writes real vectors (real embedding API cost) into the real
+`storage/chroma/` collection. Cleanup relies entirely on each test's own `finally:
+kb_manager.delete_document(...)` — if a test fails before reaching that cleanup, or a script
+calls `add_document()`/`delete_document()` outside a test with mismatched source_ids, orphan
+chunks accumulate silently (this happened once for real: 619 orphan chunks from a manually
+re-uploaded `WorldEnergyOutlook2021.pdf`, found only by comparing `count_documents()` against
+the sum of `kb/sources.json`). Known, not fixed in this pass — proper isolation would require
+mocking `rag.vector_store.get_collection` or pointing it at a tmp_path-backed
+`PersistentClient` for the duration of these tests.
