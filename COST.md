@@ -1,3 +1,1 @@
-# Cost Tracking
-
-TODO: documented in later milestone.
+Xem [output/COST.md](output/COST.md) để biết chi tiết chi phí.
