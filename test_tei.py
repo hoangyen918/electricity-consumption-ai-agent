@@ -1,6 +1,7 @@
 import requests
+from config.settings import SETTINGS
 
-API_KEY = "753aeb73adced5ec7bd7c76f61fba6bf77454abd049c9f42d32d72e5fbf408cc"  # giữ nguyên key thật của bạn
+API_KEY = SETTINGS.tei_api_key
 
 # Test embedding — đã xác nhận hoạt động, thử thêm câu tiếng Việt dài hơn
 resp = requests.post(

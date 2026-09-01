@@ -95,6 +95,34 @@ def test_existing_datetime_and_month_columns_not_overwritten():
     assert result["year"].tolist() == [2017, 2017]
 
 
+def test_dmy_slash_format_detected_via_dayfirst():
+    """
+    Regression test cho bug thật phát hiện qua test Docker (logs/csv_docker_test_20260901.log,
+    schema giống solar_station_unfamiliar.csv): cột ngày dạng 'DD/MM/YYYY' (phổ biến ở VN) bị
+    derive_time_columns() TỪ CHỐI hoàn toàn trước khi fix, vì pd.to_datetime() mặc định hiểu
+    theo MM/DD (dayfirst=False) -- các ngày >12 (15, 20, 25) khiến "tháng" invalid -> coerce
+    thành NaT, tỷ lệ parse thành công chỉ 5/8 = 62.5%, dưới ngưỡng 95%.
+
+    Sau fix (_parse_datetime_best_effort thử cả dayfirst=False lẫn True, chọn tỷ lệ cao hơn):
+    dayfirst=True cho tỷ lệ 8/8 = 100%, cột được detect đúng.
+    """
+    df = pd.DataFrame({
+        "ngay_ghi_nhan": [
+            "01/03/2024", "02/03/2024", "03/03/2024", "15/03/2024",
+            "20/03/2024", "01/04/2024", "10/04/2024", "25/04/2024",
+        ],
+        "san_luong_kwh": [152.3, 148.7, 160.1, 133.4, 155.9, 140.2, 165.8, 138.6],
+    })
+
+    result, source_column = derive_time_columns(df)
+
+    assert source_column == "ngay_ghi_nhan"
+    assert "datetime" in result.columns
+    assert result["month"].tolist() == [3, 3, 3, 3, 3, 4, 4, 4]
+    assert result["day"].tolist() == [1, 2, 3, 15, 20, 1, 10, 25]
+    assert result["year"].tolist() == [2024] * 8
+
+
 def test_no_datetime_like_column_at_all_no_exception():
     """Dataset hoàn toàn không có cột nào giống ngày giờ (toàn số) -> không derive
     gì, không raise exception."""

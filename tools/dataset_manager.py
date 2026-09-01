@@ -6,6 +6,35 @@ DATETIME_DERIVED_COLUMNS = ["year", "month", "day", "hour", "weekday", "date"]
 MIN_DATETIME_PARSE_RATE = 0.95
 
 
+def _parse_datetime_best_effort(series: pd.Series) -> tuple[pd.Series, float]:
+    """
+    Thử pd.to_datetime với CẢ dayfirst=False (mặc định) và dayfirst=True, chọn kết
+    quả có tỷ lệ parse thành công (không NaT) cao hơn. KHÔNG hardcode dayfirst cho
+    toàn bộ derive_time_columns — mỗi cột tự chọn hướng phù hợp với dữ liệu của nó
+    (vd cột kiểu VN "15/03/2024" cần dayfirst=True mới parse được vì ngày=15>12 khiến
+    cách hiểu MM/DD mặc định coerce thành NaT; cột ISO "2017-01-05 13:20:00" không bị
+    ảnh hưởng bởi dayfirst nên vẫn ra kết quả như cũ).
+
+    Lưu ý: nếu MỌI giá trị trong cột đều có phần "ngày" ≤ 12 (vd toàn "01/03/2024"),
+    cả 2 cách hiểu đều "parse được" (tỷ lệ bằng nhau) nhưng có thể cho ý nghĩa khác
+    nhau (tháng 1 ngày 3 vs tháng 3 ngày 1) — trường hợp này không thể phân biệt chỉ
+    bằng tỷ lệ parse, giữ nguyên dayfirst=False (mặc định pandas) khi tỷ lệ bằng nhau.
+    """
+    non_null = series.notna().sum()
+    if non_null == 0:
+        return pd.to_datetime(series, errors="coerce"), 0.0
+
+    parsed_default = pd.to_datetime(series, errors="coerce", dayfirst=False)
+    rate_default = parsed_default.notna().sum() / non_null
+
+    parsed_dayfirst = pd.to_datetime(series, errors="coerce", dayfirst=True)
+    rate_dayfirst = parsed_dayfirst.notna().sum() / non_null
+
+    if rate_dayfirst > rate_default:
+        return parsed_dayfirst, rate_dayfirst
+    return parsed_default, rate_default
+
+
 def derive_time_columns(df: pd.DataFrame) -> tuple[pd.DataFrame, str | None]:
     """
     Tự động phát hiện cột datetime trong dataframe (KHÔNG hard-code tên cột cụ thể
@@ -24,9 +53,8 @@ def derive_time_columns(df: pd.DataFrame) -> tuple[pd.DataFrame, str | None]:
     source_column: str | None = None
 
     if "datetime" in df.columns:
-        parsed = pd.to_datetime(df["datetime"], errors="coerce")
-        non_null = df["datetime"].notna().sum()
-        if non_null > 0 and parsed.notna().sum() / non_null >= MIN_DATETIME_PARSE_RATE:
+        parsed, rate = _parse_datetime_best_effort(df["datetime"])
+        if rate >= MIN_DATETIME_PARSE_RATE:
             source_column = "datetime"
             df["datetime"] = parsed
 
@@ -37,11 +65,9 @@ def derive_time_columns(df: pd.DataFrame) -> tuple[pd.DataFrame, str | None]:
         for col in df.columns:
             if col == "datetime" or pd.api.types.is_numeric_dtype(df[col]):
                 continue
-            non_null = df[col].notna().sum()
-            if non_null == 0:
+            if df[col].notna().sum() == 0:
                 continue
-            parsed = pd.to_datetime(df[col], errors="coerce")
-            rate = parsed.notna().sum() / non_null
+            parsed, rate = _parse_datetime_best_effort(df[col])
             if rate > best_rate:
                 best_rate = rate
                 best_col = col

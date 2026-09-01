@@ -22,7 +22,7 @@
 
 ### Quyết định kỹ thuật có bằng chứng
 - Hybrid BM25+RRF: thử nghiệm, reject vì 1 case tệ hơn (không đạt tiêu chí "không được tệ hơn")
-- Cross-encoder reranker: thử nghiệm, reject vì case xfail #11 → #18 (tệ hơn)
+- Cross-encoder reranker: đã thử, không đạt hiệu quả — chi tiết số liệu đang được khôi phục lại
 - Threshold `SCORE_THRESHOLD=1.3`: đo thật, margin 0.41
 
 ## Tuần 2 (2026-08-28 → 2026-09-01)
@@ -49,5 +49,24 @@
 - 51/53 = 96.2% accuracy, $0.31/lần eval, 21.4s trung bình/câu
 - 2 case fail còn lại: both_007 + parametric_001 (search-until-exhausted, đã ghi nhận,
   không phải bug retrieval)
-- Docker verified: upload dataset + câu hỏi theo tháng + RAG + memory + CSV lạ + ingest KB
-  + xóa KB
+- Docker verified: upload dataset + câu hỏi theo tháng + RAG + ingest KB + xóa KB
+- Memory (nhớ ngữ cảnh phiên): code chạy đúng — `agent/agent.py` (`self.messages` tích lũy
+  qua các lượt) + `agent/loop.py` (mutate cùng list reference qua mỗi `ask()`) — nhưng CHƯA
+  có test/case xác nhận đúng ý nghĩa multi-turn (câu sau tham chiếu câu trước), và CHƯA
+  verify riêng trong Docker
+- CSV lạ trong Docker (2026-09-01, log: `logs/csv_docker_test_20260901.log`, force-added dù
+  `logs/` bị gitignore, đã quét sạch không có key/token nào bị log): test qua AppTest mô
+  phỏng `st.file_uploader` thật trên `app.py` chạy trong container (`docker-compose up`),
+  schema hoàn toàn khác Tetouan (cột `ngay_ghi_nhan` định dạng `DD/MM/YYYY`, cột categorical
+  `ma_tram`/`trang_thai`). KHÔNG crash ở bất kỳ bước nào (app, 3 tool gọi trực tiếp, Agent
+  thật qua LLM) — nhưng phát hiện lỗi thật: `derive_time_columns()` không nhận diện được cột
+  ngày `DD/MM/YYYY` (thiếu `dayfirst=True`, tỷ lệ parse rơi dưới ngưỡng 95% vì ngày >12 như
+  15, 20, 25 bị coerce thành NaT khi hiểu theo MM/DD mặc định).
+  **ĐÃ FIX (cùng ngày):** `_parse_datetime_best_effort()` mới trong `tools/dataset_manager.py`
+  thử cả `dayfirst=False` và `dayfirst=True` cho mỗi cột ứng viên, chọn tỷ lệ parse cao hơn —
+  không hardcode `dayfirst=True` cho toàn hàm (tránh phá cột ISO/US format vốn đã đúng).
+  **Test regression:** `test_dmy_slash_format_detected_via_dayfirst` (tests/test_derive_time_columns.py)
+  — xác nhận FAIL trên code cũ (`git stash` tạm bỏ fix, chạy test → fail đúng như bug thật),
+  PASS sau khi khôi phục fix. Toàn bộ 7/7 test derive_time_columns + 8/8 test_dataset_manager
+  (bao gồm cột `datetime` ISO của Tetouan) đều pass — 0 regression. Full suite: 104 passed,
+  1 xfailed (từ 103 passed trước đó, +1 test mới, không mất test nào).
