@@ -35,7 +35,7 @@ User → Streamlit UI → Agent Loop (OpenRouter, qwen/qwen3.6-27b)
 - ChromaDB (PersistentClient, lưu cục bộ tại storage/chroma/)
 - PyMuPDF (PDF), hỗ trợ thêm TXT/MD qua registry mở rộng được
 - Pydantic (validate tham số tool)
-- pytest (93 test tự động)
+- pytest (114 test tự động)
 
 ## Cài đặt và chạy
 
@@ -78,7 +78,7 @@ rag/        extractors.py, chunker.py, embeddings.py, vector_store.py, retriever
             citations.py, kb_manager.py (upload/list/xóa KB động)
 agent/      tool_schemas.py, tool_registry.py, loop.py, agent.py
 services/   openrouter_client.py, logger.py, cost_tracker.py
-tests/      93 test tự động (pytest)
+tests/      114 test tự động (pytest)
 evals/      cases.jsonl (53 câu), run_evals.py, results/
 scripts/    download_data.py, prepare_data.py, ingest_kb.py
 app.py      Streamlit UI
@@ -163,7 +163,7 @@ qua cả 2 lần chạy độc lập). `both_007` là vấn đề search-until-e
 ## Testing
 
 ```bash
-pytest tests/ -v          # 93 test, ~5-8 phút (một số gọi API thật)
+pytest tests/ -v          # 114 test, ~5-8 phút (một số gọi API thật)
 python evals/run_evals.py # 53 câu eval end-to-end (~20-30 phút, tốn API thật)
 ```
 

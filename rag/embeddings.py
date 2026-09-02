@@ -10,7 +10,7 @@ _client = OpenAI(
 
 BATCH_SIZE = 100
 MAX_RETRIES = 3
-RETRY_BACKOFF_SECONDS = 2  # nhân đôi mỗi lần retry: 2s, 4s, 8s
+RETRY_BACKOFF_SECONDS = 2  # nhân đôi mỗi lần retry: 2s, 4s (chỉ chờ giữa các lần thử, không chờ sau lần cuối)
 
 
 def _embed_batch(texts: list[str], usage_accumulator: list[int] | None = None) -> list[list[float]]:
