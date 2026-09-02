@@ -6,6 +6,8 @@ kết hợp phân tích dữ liệu có cấu trúc (Pandas) và tra cứu tài 
 ## Tính năng chính
 - Phân tích dữ liệu CSV/Excel qua 6 công cụ Pandas (trung bình, gom nhóm, tìm đỉnh, so sánh,
   tương quan, tổng quan dataset)
+- Hỗ trợ upload và quản lý nhiều dataset CSV/Excel cùng lúc, agent tự chọn dataset phù hợp
+  theo câu hỏi
 - Tra cứu tri thức từ 17 tài liệu (2 báo cáo EVN, 1 văn bản chính sách VN, 14 báo cáo IEA quốc tế)
 - Kết hợp cả hai (BOTH mode) — tra cứu quy định rồi tính toán áp dụng
 - Trích dẫn nguồn chính xác (tên tài liệu + trang/mục)

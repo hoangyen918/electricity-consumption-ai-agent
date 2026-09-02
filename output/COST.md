@@ -29,6 +29,30 @@ chính thức (`evals/results/eval_detail_20260901_011250.json`) từng dùng `g
 deterministic giữa các lần gọi (đã ghi nhận trong `DATA_SOURCES.md`), cả 2 cách đều ra đúng
 kết quả.
 
+### Ảnh hưởng của multi-dataset (thêm 2026-09-02, xem `logs/multi_dataset_docker_test_20260902.log`)
+
+**Upload 2 file thay vì 1 — embedding cost:** **$0 chênh lệch.** Upload dataset CSV/Excel
+(`DatasetManager.load_csv`/`load_excel`) chỉ đọc bằng `pandas`, KHÔNG gọi embedding model —
+embedding chỉ phát sinh khi nạp tài liệu vào Knowledge Base (PDF/TXT/MD qua
+`scripts/ingest_kb.py` hoặc UI "Thêm tài liệu vào KB"), không liên quan tới upload dataset.
+Đã xác nhận qua đọc code `tools/dataset_manager.py` (không có lời gọi embedding nào).
+
+**Câu hỏi cross-dataset — số bước/tool call tăng:** Đo thật qua log Docker (agent mới, không
+có lịch sử hội thoại): câu hỏi trên **1** dataset (kịch bản d, "solar station trung bình")
+chỉ tốn **1 tool call** (1 iteration). Câu hỏi **cross-dataset** (kịch bản e, "so sánh Zone 1
+với solar station") tốn **4 iterations, 5 tool call** (`get_dataset_summary` → 2×
+`aggregate_metric` với `dataset_name` khác nhau → 2× `calculate`).
+
+Log không ghi lại token/USD cho phiên multi-dataset này (script test chỉ log tool call + câu
+trả lời, không log cost) → **không có số đo thật cho $ ở đây**. Ước tính dựa trên dữ liệu cost
+đã đo thật ở trên (case `data_001`, 2-3 iterations ≈ $0.0033–$0.0044): ngoại suy tuyến tính
+theo tỷ lệ số bước lặp (4 bước cross-dataset / 1 bước đơn dataset ≈ 4×số bước, nhưng phần lớn
+chi phí nằm ở 2 lời gọi LLM đầu đã có context dài, các bước `calculate` sau rẻ vì không cần
+gọi lại `search`/tool nặng) → **ước tính khoảng 1.5–2.5 lần chi phí của 1 câu hỏi đơn
+dataset**, tương đương **~$0.005–$0.008/câu cross-dataset** thay vì ~$0.003/câu đơn dataset.
+**Đây là ước tính ngoại suy, chưa phải số đo trực tiếp** — cần đo thật qua `cost_tracker` nếu
+cần số chính xác cho báo cáo chính thức.
+
 ## 3 kịch bản sử dụng
 
 Trung bình theo category, tính từ **`evals/results/eval_detail_20260901_011250.json`**

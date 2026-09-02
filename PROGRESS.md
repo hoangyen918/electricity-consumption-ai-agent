@@ -39,6 +39,15 @@
 - Phát hiện + dọn 619 chunk orphan trong ChromaDB
 - COST.md: 3 kịch bản, 3 đề xuất tối ưu, 3 rủi ro
 - DATA_SOURCES.md: 10+ Known Limitations có bằng chứng
+- Phase 0 retrieval metrics: `gold_evidence` cho 21 câu kb_qa/both (verify qua `retrieve()`
+  thật), formal Recall@5/Recall@10/MRR/Citation correctness trong `evals/run_evals.py`,
+  threshold PASS/FAIL, baseline `evals/baselines/v1_baseline.json`
+- Tab "Đánh giá hệ thống" trong UI: 5 metric card, per-category, per-case retrieval,
+  threshold PASS/FAIL — đọc trực tiếp từ baseline JSON, không hardcode
+- Multi-dataset: `DatasetManager` chuyển sang `dict[str, DataFrame]`, 6 tool Pandas nhận
+  `dataset_name`, agent tự phân rã câu hỏi cross-dataset thành nhiều tool call với
+  `dataset_name` khác nhau (verify qua Docker + AppTest thật, 5 kịch bản a-e, xem
+  `logs/multi_dataset_docker_test_20260902.log`)
 
 ### Vấn đề gặp phải
 - Orphan chunks do khác biệt source_id giữa script ingest (đặt tay) và UI upload

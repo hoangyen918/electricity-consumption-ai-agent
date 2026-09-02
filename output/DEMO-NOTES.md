@@ -19,3 +19,17 @@ liệt kê các cột thật có sẵn — không tự bịa số.
 2. Upload 1 file PDF/TXT/MD bất kỳ (mentor tự chọn), đặt tên hiển thị
 3. Bấm "Nạp vào Knowledge Base" — thấy số đoạn (chunks) mới xuất hiện ngay trong danh sách
 4. Hỏi 1 câu liên quan tới nội dung vừa nạp — agent trả lời có trích dẫn đúng nguồn mới
+
+## Câu hỏi multi-dataset — ví dụ
+Upload 2 CSV khác schema (`tetouan_sample.csv` + `solar_station.csv`, cột khác nhau hoàn toàn)
+→ hỏi "So sánh trung bình Zone 1 với trung bình sản lượng solar station" → agent tự gọi
+`aggregate_metric` 2 lần với `dataset_name` khác nhau (`tetouan_sample.csv`,
+`solar_station.csv`), rồi `calculate` để so sánh — không cần người dùng chỉ định file nào
+(đo qua Docker với agent mới/không có lịch sử hội thoại, xem
+`logs/multi_dataset_docker_test_20260902.log`, dòng 80-106).
+
+## Tab "Đánh giá hệ thống" — có gì
+5 metric card (Overall accuracy, Recall@5, Recall@10, MRR, Citation correctness), threshold
+PASS/FAIL theo từng metric, bảng kết quả theo category, và bảng chi tiết retrieval theo từng
+câu `kb_qa`/`both` — toàn bộ đọc trực tiếp từ `evals/baselines/v1_baseline.json` (file thật do
+`evals/run_evals.py` sinh ra), không hardcode số liệu trong UI.
