@@ -10,8 +10,6 @@ data/raw/*
 !data/raw/.gitkeep
 data/processed/*
 !data/processed/.gitkeep
-kb/raw/*
-!kb/raw/.gitkeep
 .pytest_cache/
 .DS_Store
 *.egg-info/
