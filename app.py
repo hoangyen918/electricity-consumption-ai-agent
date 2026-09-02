@@ -1,17 +1,49 @@
 """Streamlit UI cho Electricity Consumption AI Agent."""
+import json
+import re
 import tempfile
 from pathlib import Path
 
+import pandas as pd
 import streamlit as st
 
 from tools.dataset_manager import DatasetManager
 from agent.agent import Agent
 from config.settings import SETTINGS
 from rag.vector_store import count_documents
+from rag.retriever import SCORE_THRESHOLD
+from evals.run_evals import REFUSAL_PATTERNS, THRESHOLDS
 
 st.set_page_config(page_title=SETTINGS.app_title, page_icon="⚡", layout="wide")
 
 DEFAULT_DATASET_PATH = "data/processed/tetouan_clean.csv"
+BASELINE_PATH = Path("evals/baselines/v1_baseline.json")
+CASES_PATH = Path("evals/cases.jsonl")
+MARGIN_WARNING_THRESHOLD = 0.1  # cảnh báo nếu distance cách SCORE_THRESHOLD dưới 0.1
+
+
+def load_eval_baseline() -> dict | None:
+    """Đọc evals/baselines/v1_baseline.json. Trả None nếu chưa tồn tại (vd clone mới
+    chưa chạy eval) — KHÔNG raise, để UI tự xử lý hiển thị thông báo phù hợp."""
+    if not BASELINE_PATH.exists():
+        return None
+    try:
+        return json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def load_case_questions() -> dict[str, str]:
+    """Đọc evals/cases.jsonl -> {case_id: question}. Trả {} nếu file không tồn tại."""
+    if not CASES_PATH.exists():
+        return {}
+    questions = {}
+    for line in CASES_PATH.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line:
+            case = json.loads(line)
+            questions[case["id"]] = case["question"]
+    return questions
 
 
 def init_session_state():
@@ -143,6 +175,115 @@ def render_sidebar():
             st.rerun()
 
 
+def render_eval_dashboard():
+    """Phần 1 — trang tổng quan eval batch (53 case), đọc từ evals/baselines/v1_baseline.json
+    (file thật do evals/run_evals.py sinh ra). Không hardcode số liệu."""
+    baseline = load_eval_baseline()
+    if baseline is None:
+        st.warning("Chưa có dữ liệu đánh giá — chạy `python evals/run_evals.py` trước.")
+        return
+
+    st.caption(f"Baseline đo lúc: {baseline.get('timestamp', 'không rõ')}")
+
+    # --- 1a. Bảng tổng quan ---
+    st.subheader("📈 Tổng quan")
+    total = baseline["total_cases"]
+    passed = baseline["passed"]
+    accuracy = baseline["overall_accuracy"]
+    retrieval = baseline.get("retrieval", {})
+
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("Overall accuracy", f"{passed}/{total}", f"{accuracy*100:.1f}%")
+    col2.metric("Recall@5", f"{retrieval.get('recall_at_5', 0)*100:.1f}%")
+    col3.metric("Recall@10", f"{retrieval.get('recall_at_10', 0)*100:.1f}%")
+    col4.metric("MRR", f"{retrieval.get('mrr', 0):.4f}")
+    col5.metric("Citation correctness", f"{retrieval.get('citation_correctness_rate', 0)*100:.1f}%")
+
+    st.write("**Threshold PASS/FAIL:**")
+    threshold_values = {
+        "overall_accuracy_min": accuracy,
+        "recall_at_10_min": retrieval.get("recall_at_10", 0),
+        "mrr_min": retrieval.get("mrr", 0),
+    }
+    for name, minimum in THRESHOLDS.items():
+        actual = threshold_values.get(name)
+        if actual is None:
+            continue
+        if actual >= minimum:
+            st.success(f"✅ PASS — {name}: {actual:.4f} (ngưỡng ≥ {minimum})")
+        else:
+            st.error(f"❌ FAIL — {name}: {actual:.4f} (ngưỡng ≥ {minimum})")
+
+    notes = baseline.get("notes")
+    if notes:
+        with st.expander("Ghi chú vận hành (network issue, giới hạn đã biết...)"):
+            st.json(notes)
+
+    st.divider()
+
+    # --- 1b. Bảng per-category ---
+    st.subheader("📂 Theo category")
+    categories = baseline.get("categories") or baseline.get("by_category") or {}
+    for cat, v in categories.items():
+        cat_accuracy = v["accuracy"]
+        line = f"**{cat}**: {v['passed']}/{v['total']} ({cat_accuracy*100:.1f}%)"
+        if cat_accuracy >= 1.0:
+            st.success(line)
+        else:
+            st.warning(line)
+
+    st.divider()
+
+    # --- 1c. Bảng per-case retrieval ---
+    st.subheader("🔍 Chi tiết retrieval theo câu (kb_qa + both)")
+    per_case = retrieval.get("per_case") or []
+    if not per_case:
+        st.write("_Không có dữ liệu per-case retrieval trong baseline này._")
+    else:
+        questions = load_case_questions()
+        rows = []
+        for c in per_case:
+            rows.append({
+                "id": c["id"],
+                "câu hỏi": questions.get(c["id"], ""),
+                "recall@5": c["recall_5"],
+                "recall@10": c["recall_10"],
+                # rank giữ nguyên kiểu số (None -> NaN qua pandas) — KHÔNG trộn str/int
+                # trong cùng cột, vì Arrow serialization (st.dataframe) crash với cột
+                # kiểu hỗn hợp. NaN tự hiển thị rõ trên UI, không cần chuỗi thay thế.
+                "rank": c["rank"],
+                "citation_correct": c["citation_correct"],
+                "_fail_sort": 0 if not (c["recall_10"] and c["citation_correct"]) else 1,
+            })
+        df = pd.DataFrame(rows).sort_values("_fail_sort").drop(columns="_fail_sort")
+        st.dataframe(df, width="stretch", hide_index=True)
+
+    st.divider()
+
+    # --- 1d. Chạy lại eval — chỉ hướng dẫn tĩnh, KHÔNG chạy subprocess thật trong UI
+    # (rủi ro cao: block UI ~20 phút, tốn tiền thật nếu bấm nhầm, không kiểm soát được
+    # tiến trình — task cho phép bỏ qua nếu khó implement an toàn).
+    st.subheader("🔄 Chạy lại eval")
+    st.info(
+        "Chạy `python evals/run_evals.py` từ terminal để cập nhật số liệu trên "
+        "(tốn ~$0.29, mất ~20-30 phút, gọi API thật)."
+    )
+
+
+def _classify_answerability(answer: str) -> str:
+    """
+    Heuristic đơn giản, tái sử dụng REFUSAL_PATTERNS đã có trong evals/run_evals.py
+    (không viết lại logic từ chối mới). "Hỏi lại" chỉ là heuristic thô (answer kết
+    thúc bằng dấu hỏi) — không chính xác tuyệt đối, chỉ mang tính tham khảo nhanh.
+    """
+    answer_lower = answer.lower()
+    if any(re.search(p, answer_lower) for p in REFUSAL_PATTERNS):
+        return "Từ chối"
+    if answer.strip().endswith("?"):
+        return "Hỏi lại"
+    return "Trả lời"
+
+
 def render_trace_expander(trace_info: dict):
     with st.expander("🔍 Xem chi tiết xử lý (Agent Trace)"):
         col1, col2, col3 = st.columns(3)
@@ -150,6 +291,7 @@ def render_trace_expander(trace_info: dict):
         col2.metric("Thời gian", f"{trace_info['latency_ms']:.0f} ms")
         col3.metric("Chi phí ước tính", f"${trace_info['estimated_cost_usd']:.6f}")
 
+        search_chunks = []
         if trace_info["trace"]:
             st.write("**Công cụ đã gọi:**")
             for t in trace_info["trace"]:
@@ -158,8 +300,43 @@ def render_trace_expander(trace_info: dict):
                 st.json(t["arguments"])
                 if not t["result"]["ok"]:
                     st.error(t["result"]["error"])
+                elif t["tool_name"] == "search_knowledge_base":
+                    for r in t["result"]["data"].get("results", []):
+                        search_chunks.append(r)
+                        preview = r["text"][:100] + ("…" if len(r["text"]) > 100 else "")
+                        line = f"📄 {r['source']} (trang {r['page']}) · distance {r['distance']} — \"{preview}\""
+                        margin = SCORE_THRESHOLD - r["distance"]
+                        if margin < MARGIN_WARNING_THRESHOLD:
+                            st.warning(f"{line}\n\n⚠️ Sát ngưỡng SCORE_THRESHOLD={SCORE_THRESHOLD} "
+                                       f"(margin={margin:.4f})")
+                        else:
+                            st.caption(line)
         else:
             st.write("_Không có công cụ nào được gọi (trả lời trực tiếp từ model)._")
+
+        if trace_info.get("usage_per_call"):
+            st.write("**Token mỗi lần gọi LLM:**")
+            st.json(trace_info["usage_per_call"])
+
+        # --- Phần 2: Đánh giá câu trả lời (live eval per-question) ---
+        answer = trace_info.get("answer", "")
+        st.divider()
+        st.write("**📝 Đánh giá câu trả lời:**")
+
+        answerability = _classify_answerability(answer)
+        st.caption(f"Answerability: **{answerability}**")
+
+        if search_chunks:
+            has_citation_marker = any(
+                marker in answer for marker in ("Nguồn:", "[", "trang", "p.")
+            )
+            matches_retrieved_source = any(
+                c["source"].lower() in answer.lower() for c in search_chunks
+            )
+            st.caption(
+                f"Trích dẫn nguồn: **{'Có' if has_citation_marker else 'Không'}** · "
+                f"Khớp chunk retrieve: **{'Khớp' if matches_retrieved_source else 'Không khớp'}**"
+            )
 
 
 def render_chat():
@@ -193,6 +370,8 @@ def render_chat():
                             "latency_ms": result["latency_ms"],
                             "estimated_cost_usd": result["estimated_cost_usd"],
                             "trace": result["trace"],
+                            "usage_per_call": result["usage_per_call"],
+                            "answer": result["answer"],
                         }
                         render_trace_expander(trace_info)
                         st.session_state.chat_history.append({
@@ -211,7 +390,12 @@ def render_chat():
 def main():
     init_session_state()
     render_sidebar()
-    render_chat()
+
+    tab_chat, tab_eval = st.tabs(["💬 Chat", "📊 Đánh giá hệ thống"])
+    with tab_chat:
+        render_chat()
+    with tab_eval:
+        render_eval_dashboard()
 
 
 if __name__ == "__main__":

@@ -70,3 +70,39 @@
   PASS sau khi khôi phục fix. Toàn bộ 7/7 test derive_time_columns + 8/8 test_dataset_manager
   (bao gồm cột `datetime` ISO của Tetouan) đều pass — 0 regression. Full suite: 104 passed,
   1 xfailed (từ 103 passed trước đó, +1 test mới, không mất test nào).
+
+## Cuối tuần 1
+
+**Repo / link code:**
+https://github.com/hoangyen918/electricity-consumption-ai-agent
+
+**Đã làm được (loop / tool / RAG / UI):**
+Agent loop (observe → act → max_steps) hoạt động với 6 tool Pandas; RAG pipeline đầy đủ
+(PyMuPDF extract → chunk → text-embedding-3-small → ChromaDB, 17 nguồn/6.127 chunks); UI
+Streamlit có upload dataset, chat, và Agent Trace.
+
+**Đã đọc / tham khảo (link):**
+`dataquestio/tutorials/evaluating-llm-outputs` — tham khảo phương pháp LLM-as-a-Judge
+(nguyên văn ghi trong README.md, không có URL đầy đủ trong repo để dẫn link chính xác)
+
+**Kẹt / cần mentor:**
+[intern tự bổ sung] — không tìm thấy ghi chú nào trong repo
+
+**Tuần 2 dự định:**
+Hoàn thiện eval suite (53 câu, 8 category), triển khai Docker, mở rộng tính năng KB
+(upload/xóa động), viết đầy đủ COST.md + DATA_SOURCES.md.
+
+## Trước demo tuần 2
+
+**Cách chạy (1–2 dòng):**
+Clone → venv → `pip install -r requirements.txt` → điền `.env` → `python scripts/prepare_data.py`
+→ `python scripts/ingest_kb.py` (1 lần) → `streamlit run app.py`.
+
+**URL hoặc Docker:**
+Docker — `docker-compose up -d --build` (port 8501, theo `docker-compose.yml`)
+
+**Sample CSV + tài liệu KB nằm ở:**
+- CSV: `data/sample/tetouan_sample.csv`
+- KB: `kb/raw/` (17 file PDF — EVN, IEA, Chỉ thị 20)
+
+**Tự đánh giá % hoàn thành đề:** ___% *(intern tự điền)*
