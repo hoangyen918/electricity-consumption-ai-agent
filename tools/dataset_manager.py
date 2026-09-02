@@ -95,32 +95,49 @@ def derive_time_columns(df: pd.DataFrame) -> tuple[pd.DataFrame, str | None]:
 
 
 class DatasetManager:
-    """Giữ 1 dataframe duy nhất trong memory cho toàn bộ session."""
+    """
+    Giữ NHIỀU dataset trong memory cho 1 session (key = tên dataset, mặc định là
+    basename file, có thể truyền tên khác qua tham số `name` — dùng khi path vật lý
+    là file tạm nhưng muốn hiển thị đúng tên gốc user upload, xem app.py::handle_upload).
+    "Active" luôn là dataset được load() gần nhất — tool nào không truyền dataset_name
+    sẽ thao tác trên active, giữ nguyên hành vi single-dataset cũ.
+    """
 
     def __init__(self):
-        self._df: pd.DataFrame | None = None
-        self._source_path: str | None = None
-        self._datetime_source_column: str | None = None
+        self._datasets: dict[str, pd.DataFrame] = {}
+        self._source_paths: dict[str, str] = {}
+        self._datetime_source_columns: dict[str, str | None] = {}
+        self._active_name: str | None = None
 
-    def load_csv(self, path: str) -> None:
+    @property
+    def df(self) -> pd.DataFrame:
+        """Backward-compat property, tương đương get_dataframe() không tham số (raise
+        nếu chưa load dataset nào)."""
+        return self.get_dataframe()
+
+    def load_csv(self, path: str, name: str | None = None) -> None:
         df = pd.read_csv(path)
         df, source_column = derive_time_columns(df)
-        self._df = df
-        self._source_path = path
-        self._datetime_source_column = source_column
+        key = name or Path(path).name
+        self._datasets[key] = df
+        self._source_paths[key] = path
+        self._datetime_source_columns[key] = source_column
+        self._active_name = key
 
-    def load_excel(self, path: str, sheet_name=0) -> None:
+    def load_excel(self, path: str, sheet_name=0, name: str | None = None) -> None:
         """
         Load dữ liệu từ file Excel (.xlsx/.xls). Mặc định đọc sheet đầu tiên.
         sheet_name có thể là tên sheet (str) hoặc index (int).
         """
         df = pd.read_excel(path, sheet_name=sheet_name)
         df, source_column = derive_time_columns(df)
-        self._df = df
-        self._source_path = path
-        self._datetime_source_column = source_column
+        key = name or Path(path).name
+        self._datasets[key] = df
+        self._source_paths[key] = path
+        self._datetime_source_columns[key] = source_column
+        self._active_name = key
 
-    def load_file(self, path: str, sheet_name=0) -> None:
+    def load_file(self, path: str, sheet_name=0, name: str | None = None) -> None:
         """
         Điểm vào chung — tự nhận diện .csv hay .xlsx/.xls theo phần mở rộng,
         gọi đúng method tương ứng. Dùng hàm này thay vì gọi trực tiếp
@@ -128,30 +145,66 @@ class DatasetManager:
         """
         ext = Path(path).suffix.lower()
         if ext == ".csv":
-            self.load_csv(path)
+            self.load_csv(path, name=name)
         elif ext in (".xlsx", ".xls"):
-            self.load_excel(path, sheet_name=sheet_name)
+            self.load_excel(path, sheet_name=sheet_name, name=name)
         else:
             raise ValueError(f"Định dạng '{ext}' không được hỗ trợ. Chỉ hỗ trợ .csv, .xlsx, .xls")
 
     def is_loaded(self) -> bool:
-        return self._df is not None
+        return len(self._datasets) > 0
 
-    def get_dataframe(self) -> pd.DataFrame:
-        if self._df is None:
-            raise RuntimeError("No dataset loaded. Call load_csv() first.")
-        return self._df
+    def get_dataframe(self, name: str | None = None) -> pd.DataFrame | None:
+        """
+        name=None -> active dataset. name=None VÀ chưa từng load gì -> raise
+        RuntimeError (giữ đúng hành vi cũ trước khi có multi-dataset, xem
+        test_get_dataframe_raises_when_not_loaded). name=chuỗi cụ thể không tồn tại
+        trong dict -> trả None (KHÔNG raise) — dùng để tool tự phát hiện dataset_name
+        sai và trả lỗi rõ ràng, xem tools/dataframe_tools.py.
+        """
+        if name is None:
+            if self._active_name is None:
+                raise RuntimeError("No dataset loaded. Call load_csv() first.")
+            return self._datasets[self._active_name]
+        return self._datasets.get(name)
 
-    def get_columns(self) -> list[str]:
-        return list(self.get_dataframe().columns)
+    def get_columns(self, name: str | None = None) -> list[str]:
+        df = self.get_dataframe(name)
+        return list(df.columns) if df is not None else []
 
-    def get_numeric_columns(self) -> list[str]:
-        df = self.get_dataframe()
+    def get_numeric_columns(self, name: str | None = None) -> list[str]:
+        df = self.get_dataframe(name)
+        if df is None:
+            return []
         return df.select_dtypes(include="number").columns.tolist()
 
-    def get_datetime_source_column(self) -> str | None:
+    def get_datetime_source_column(self, name: str | None = None) -> str | None:
         """
         Tên cột gốc được tự động chọn làm nguồn datetime (xem derive_time_columns).
-        None nếu không có cột nào đạt ngưỡng parse hoặc chưa load dataset nào.
+        None nếu không có cột nào đạt ngưỡng parse, tên không tồn tại, hoặc chưa load
+        dataset nào.
         """
-        return self._datetime_source_column
+        key = name or self._active_name
+        if key is None:
+            return None
+        return self._datetime_source_columns.get(key)
+
+    def list_datasets(self) -> list[str]:
+        return list(self._datasets.keys())
+
+    def get_active_name(self) -> str | None:
+        return self._active_name
+
+    def remove_dataset(self, name: str) -> bool:
+        """Xóa 1 dataset. Nếu xóa đúng active, tự chuyển active sang dataset còn lại
+        gần nhất (theo thứ tự chèn) hoặc None nếu không còn gì. Trả False nếu tên
+        không tồn tại (không raise)."""
+        if name not in self._datasets:
+            return False
+        del self._datasets[name]
+        self._source_paths.pop(name, None)
+        self._datetime_source_columns.pop(name, None)
+        if self._active_name == name:
+            remaining = list(self._datasets.keys())
+            self._active_name = remaining[-1] if remaining else None
+        return True

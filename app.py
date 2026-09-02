@@ -51,12 +51,12 @@ def init_session_state():
         st.session_state.dataset_manager = DatasetManager()
         default_path = Path(DEFAULT_DATASET_PATH)
         if default_path.exists():
-            st.session_state.dataset_manager.load_csv(str(default_path))
+            st.session_state.dataset_manager.load_csv(
+                str(default_path), name="Tetouan City Power Consumption (mặc định)"
+            )
             st.session_state.dataset_loaded = True
-            st.session_state.dataset_source = "Tetouan City Power Consumption (mặc định)"
         else:
             st.session_state.dataset_loaded = False
-            st.session_state.dataset_source = None
 
     if "agent" not in st.session_state:
         st.session_state.agent = Agent(st.session_state.dataset_manager)
@@ -72,9 +72,8 @@ def handle_upload(uploaded_file):
         tmp_path = tmp.name
 
     try:
-        st.session_state.dataset_manager.load_file(tmp_path)
+        st.session_state.dataset_manager.load_file(tmp_path, name=uploaded_file.name)
         st.session_state.dataset_loaded = True
-        st.session_state.dataset_source = f"Upload: {uploaded_file.name}"
         st.session_state.agent.reset()
         st.session_state.chat_history = []
         st.sidebar.success(f"Đã tải {uploaded_file.name}")
@@ -91,13 +90,36 @@ def render_sidebar():
         st.caption(SETTINGS.app_title)
 
         st.subheader("📊 Dataset")
+        manager = st.session_state.dataset_manager
         if st.session_state.dataset_loaded:
-            df = st.session_state.dataset_manager.get_dataframe()
-            st.success(f"Đã tải: {st.session_state.dataset_source}")
-            st.write(f"- Số dòng: {len(df):,}")
-            st.write(f"- Số cột: {len(df.columns)}")
-            if "datetime" in df.columns:
-                st.write(f"- Khoảng thời gian: {df['datetime'].min()} → {df['datetime'].max()}")
+            active_name = manager.get_active_name()
+            st.write("**Dataset đã tải:**")
+            for name in manager.list_datasets():
+                df_name = manager.get_dataframe(name)
+                is_active = name == active_name
+                label = (
+                    f"{'⭐ ' if is_active else ''}{name} "
+                    f"({len(df_name):,} dòng, {len(df_name.columns)} cột)"
+                )
+                col_a, col_b = st.columns([4, 1])
+                col_a.write(label)
+                if col_b.button("🗑️", key=f"del_dataset_{name}"):
+                    manager.remove_dataset(name)
+                    st.session_state.dataset_loaded = manager.is_loaded()
+                    st.session_state.agent.reset()
+                    st.session_state.chat_history = []
+                    st.rerun()
+
+            if active_name:
+                active_df = manager.get_dataframe(active_name)
+                st.caption(f"Dataset active (⭐): **{active_name}**")
+                if "datetime" in active_df.columns:
+                    st.write(
+                        f"- Khoảng thời gian: {active_df['datetime'].min()} → "
+                        f"{active_df['datetime'].max()}"
+                    )
+                st.write("**Preview:**")
+                st.dataframe(active_df.head(), width="stretch")
         else:
             st.warning(
                 "Chưa có dataset mặc định. Chạy `python scripts/prepare_data.py` "

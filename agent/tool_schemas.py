@@ -3,14 +3,24 @@ Function schemas theo chuẩn OpenAI-compatible tool calling.
 Model qua OpenRouter chỉ nhìn thấy các schema này — không biết Pandas/Chroma bên trong.
 """
 
+DATASET_NAME_PROPERTY = {
+    "type": "string",
+    "description": (
+        "Tên file dataset cần thao tác. Nếu không chỉ định, dùng dataset được upload "
+        "gần nhất. Gọi get_dataset_summary để xem danh sách dataset hiện có."
+    ),
+}
+
 GET_DATASET_SUMMARY_SCHEMA = {
     "type": "function",
     "function": {
         "name": "get_dataset_summary",
-        "description": "Lấy thông tin tổng quan về dataset đang tải: số dòng, danh sách cột, khoảng thời gian, các cột số. Dùng khi cần biết dataset có gì trước khi phân tích sâu hơn.",
+        "description": "Lấy thông tin tổng quan về dataset đang tải: số dòng, danh sách cột, khoảng thời gian, các cột số. Dùng khi cần biết dataset có gì trước khi phân tích sâu hơn. Nếu không chỉ định dataset_name, kết quả còn kèm danh sách TẤT CẢ dataset đã upload để chọn cho các lần gọi tool tiếp theo.",
         "parameters": {
             "type": "object",
-            "properties": {},
+            "properties": {
+                "dataset_name": DATASET_NAME_PROPERTY,
+            },
             "required": [],
         },
     },
@@ -40,6 +50,7 @@ AGGREGATE_METRIC_SCHEMA = {
                     "type": "string",
                     "description": "Ngày kết thúc định dạng YYYY-MM-DD, để trống nếu không lọc thời gian",
                 },
+                "dataset_name": DATASET_NAME_PROPERTY,
             },
             "required": ["column", "aggregation"],
         },
@@ -63,6 +74,7 @@ GROUP_METRIC_SCHEMA = {
                     "type": "string",
                     "enum": ["hour", "day", "month", "weekday", "year", "date"],
                 },
+                "dataset_name": DATASET_NAME_PROPERTY,
             },
             "required": ["column", "aggregation", "group_by"],
         },
@@ -79,6 +91,7 @@ FIND_PEAK_SCHEMA = {
             "properties": {
                 "column": {"type": "string"},
                 "mode": {"type": "string", "enum": ["max", "min"]},
+                "dataset_name": DATASET_NAME_PROPERTY,
             },
             "required": ["column"],
         },
@@ -103,6 +116,7 @@ COMPARE_PERIODS_SCHEMA = {
                     "enum": ["mean", "sum", "min", "max", "median", "std", "count"],
                     "default": "mean",
                 },
+                "dataset_name": DATASET_NAME_PROPERTY,
             },
             "required": ["column", "period_a_start", "period_a_end", "period_b_start", "period_b_end"],
         },
@@ -121,6 +135,7 @@ CALCULATE_CORRELATION_SCHEMA = {
                 "column_b": {"type": "string"},
                 "start_date": {"type": "string", "description": "YYYY-MM-DD, để trống nếu không lọc"},
                 "end_date": {"type": "string", "description": "YYYY-MM-DD, để trống nếu không lọc"},
+                "dataset_name": DATASET_NAME_PROPERTY,
             },
             "required": ["column_a", "column_b"],
         },

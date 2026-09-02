@@ -107,3 +107,50 @@ def test_upload_of_raw_tetouan_style_csv_supports_group_by_month(tmp_path):
     assert len(result["data"]["values"]) == 12
     # month=7 -> giá trị Zone 1 Power Consumption luôn là 700.0 theo dữ liệu tạo ở trên
     assert result["data"]["values"]["7"] == pytest.approx(700.0)
+
+
+def test_multi_dataset_load_and_retrieve_by_name(tmp_path):
+    """Upload 2 dataset khác schema -> cả 2 cùng tồn tại, get_dataframe(name) trả đúng
+    df tương ứng, không ghi đè nhau."""
+    other_csv = tmp_path / "other_schema.csv"
+    other_csv.write_text("colA,colB\n1,2\n3,4\n", encoding="utf-8")
+
+    m = DatasetManager()
+    m.load_csv(SAMPLE_PATH, name="tetouan.csv")
+    m.load_csv(str(other_csv), name="other_schema.csv")
+
+    assert set(m.list_datasets()) == {"tetouan.csv", "other_schema.csv"}
+    assert m.get_active_name() == "other_schema.csv"  # file load gần nhất
+
+    df1 = m.get_dataframe("tetouan.csv")
+    df2 = m.get_dataframe("other_schema.csv")
+    assert "zone_1_consumption" in df1.columns
+    assert list(df2.columns) == ["colA", "colB"]
+    assert len(df2) == 2
+
+
+def test_get_dataframe_nonexistent_name_returns_none():
+    m = DatasetManager()
+    m.load_csv(SAMPLE_PATH, name="only_one.csv")
+    assert m.get_dataframe("khong_ton_tai.csv") is None
+
+
+def test_remove_dataset_switches_active_to_remaining():
+    m = DatasetManager()
+    m.load_csv(SAMPLE_PATH, name="a.csv")
+    m.load_csv(SAMPLE_PATH, name="b.csv")
+    assert m.get_active_name() == "b.csv"
+
+    assert m.remove_dataset("b.csv") is True
+    assert m.get_active_name() == "a.csv"
+    assert m.list_datasets() == ["a.csv"]
+
+    assert m.remove_dataset("a.csv") is True
+    assert m.get_active_name() is None
+    assert m.list_datasets() == []
+
+
+def test_remove_nonexistent_dataset_returns_false():
+    m = DatasetManager()
+    m.load_csv(SAMPLE_PATH, name="a.csv")
+    assert m.remove_dataset("khong_ton_tai") is False

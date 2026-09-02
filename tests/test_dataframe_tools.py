@@ -257,3 +257,80 @@ def test_aggregate_metric_multi_day_range_includes_all_days(full_manager):
         f"Tháng 7/2017 (31 ngày x 144 dòng/ngày = 4464) phải đủ, "
         f"chỉ thấy {result['data']['rows_used']}"
     )
+
+
+# --- multi-dataset: tool thao tác đúng dataset_name được chỉ định, hoặc active nếu không truyền ---
+
+
+def test_aggregate_metric_with_explicit_dataset_name(tmp_path):
+    """Tool gọi với dataset_name cụ thể -> thao tác đúng file đó, không bị ảnh hưởng
+    bởi dataset khác đang active."""
+    other_csv = tmp_path / "file2.csv"
+    other_csv.write_text("value\n10\n20\n30\n", encoding="utf-8")
+
+    m = DatasetManager()
+    m.load_csv(SAMPLE_PATH, name="file1.csv")
+    m.load_csv(str(other_csv), name="file2.csv")  # active giờ là file2.csv
+
+    result_file2 = aggregate_metric(m, column="value", aggregation="mean", dataset_name="file2.csv")
+    assert result_file2["ok"] is True
+    assert result_file2["data"]["value"] == pytest.approx(20.0)
+
+    result_file1 = aggregate_metric(
+        m, column="zone_1_consumption", aggregation="mean", dataset_name="file1.csv"
+    )
+    assert result_file1["ok"] is True
+
+
+def test_aggregate_metric_without_dataset_name_uses_active(tmp_path):
+    """Không truyền dataset_name -> dùng active (file load gần nhất), giữ backward compat."""
+    other_csv = tmp_path / "file2.csv"
+    other_csv.write_text("value\n10\n20\n30\n", encoding="utf-8")
+
+    m = DatasetManager()
+    m.load_csv(SAMPLE_PATH, name="file1.csv")
+    m.load_csv(str(other_csv), name="file2.csv")  # active = file2.csv
+
+    result = aggregate_metric(m, column="value", aggregation="mean")
+    assert result["ok"] is True
+    assert result["data"]["value"] == pytest.approx(20.0)
+
+
+def test_aggregate_metric_unknown_dataset_name_fails_clearly(manager):
+    result = aggregate_metric(
+        manager, column="temperature", aggregation="mean", dataset_name="khong_ton_tai.csv"
+    )
+    assert result["ok"] is False
+    assert "khong_ton_tai.csv" in result["error"]
+
+
+def test_get_dataset_summary_without_name_lists_all_datasets(tmp_path):
+    """get_dataset_summary(dataset_name=None) -> kèm all_datasets liệt kê TẤT CẢ dataset."""
+    other_csv = tmp_path / "file2.csv"
+    other_csv.write_text("value\n10\n20\n", encoding="utf-8")
+
+    m = DatasetManager()
+    m.load_csv(SAMPLE_PATH, name="file1.csv")
+    m.load_csv(str(other_csv), name="file2.csv")
+
+    result = get_dataset_summary(m)
+    assert result["ok"] is True
+    all_names = {d["name"] for d in result["data"]["all_datasets"]}
+    assert all_names == {"file1.csv", "file2.csv"}
+    assert result["data"]["dataset_name"] == "file2.csv"  # active
+
+
+def test_get_dataset_summary_with_name_no_all_datasets_list(tmp_path):
+    """get_dataset_summary(dataset_name='cụ thể') -> KHÔNG kèm all_datasets (đã biết
+    rõ đang hỏi cái nào)."""
+    other_csv = tmp_path / "file2.csv"
+    other_csv.write_text("value\n10\n20\n", encoding="utf-8")
+
+    m = DatasetManager()
+    m.load_csv(SAMPLE_PATH, name="file1.csv")
+    m.load_csv(str(other_csv), name="file2.csv")
+
+    result = get_dataset_summary(m, dataset_name="file1.csv")
+    assert result["ok"] is True
+    assert result["data"]["dataset_name"] == "file1.csv"
+    assert "all_datasets" not in result["data"]

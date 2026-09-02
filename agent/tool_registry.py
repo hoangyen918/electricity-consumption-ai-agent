@@ -26,17 +26,20 @@ class AggregateMetricArgs(BaseModel):
     aggregation: AggregationType
     start_date: Optional[str] = None
     end_date: Optional[str] = None
+    dataset_name: Optional[str] = None
 
 
 class GroupMetricArgs(BaseModel):
     column: str
     aggregation: AggregationType
     group_by: GroupByType
+    dataset_name: Optional[str] = None
 
 
 class FindPeakArgs(BaseModel):
     column: str
     mode: Literal["max", "min"] = "max"
+    dataset_name: Optional[str] = None
 
 
 class ComparePeriodsArgs(BaseModel):
@@ -46,6 +49,7 @@ class ComparePeriodsArgs(BaseModel):
     period_b_start: str
     period_b_end: str
     aggregation: AggregationType = "mean"
+    dataset_name: Optional[str] = None
 
 
 class CalculateCorrelationArgs(BaseModel):
@@ -53,6 +57,7 @@ class CalculateCorrelationArgs(BaseModel):
     column_b: str
     start_date: Optional[str] = None
     end_date: Optional[str] = None
+    dataset_name: Optional[str] = None
 
 
 class CalculateArgs(BaseModel):
@@ -76,7 +81,9 @@ def execute_tool(tool_name: str, arguments: dict, dataset_manager: DatasetManage
     """
     try:
         if tool_name == "get_dataset_summary":
-            return get_dataset_summary(dataset_manager)
+            # Không có Pydantic model riêng (không tham số bắt buộc) — lấy dataset_name
+            # trực tiếp từ dict, .get() tự trả None nếu thiếu key (đúng nghĩa optional).
+            return get_dataset_summary(dataset_manager, dataset_name=arguments.get("dataset_name"))
 
         elif tool_name == "aggregate_metric":
             args = AggregateMetricArgs(**arguments)
@@ -86,6 +93,7 @@ def execute_tool(tool_name: str, arguments: dict, dataset_manager: DatasetManage
                 aggregation=args.aggregation,
                 start_date=args.start_date,
                 end_date=args.end_date,
+                dataset_name=args.dataset_name,
             )
 
         elif tool_name == "group_metric":
@@ -95,11 +103,14 @@ def execute_tool(tool_name: str, arguments: dict, dataset_manager: DatasetManage
                 column=args.column,
                 aggregation=args.aggregation,
                 group_by=args.group_by,
+                dataset_name=args.dataset_name,
             )
 
         elif tool_name == "find_peak":
             args = FindPeakArgs(**arguments)
-            return find_peak(dataset_manager, column=args.column, mode=args.mode)
+            return find_peak(
+                dataset_manager, column=args.column, mode=args.mode, dataset_name=args.dataset_name,
+            )
 
         elif tool_name == "compare_periods":
             args = ComparePeriodsArgs(**arguments)
@@ -114,6 +125,7 @@ def execute_tool(tool_name: str, arguments: dict, dataset_manager: DatasetManage
                 period_b_start=args.period_b_start,
                 period_b_end=args.period_b_end,
                 aggregation=args.aggregation,
+                dataset_name=args.dataset_name,
             )
 
         elif tool_name == "calculate_correlation":
@@ -124,6 +136,7 @@ def execute_tool(tool_name: str, arguments: dict, dataset_manager: DatasetManage
                 column_b=args.column_b,
                 start_date=args.start_date,
                 end_date=args.end_date,
+                dataset_name=args.dataset_name,
             )
 
         elif tool_name == "calculate":

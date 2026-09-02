@@ -7,11 +7,18 @@ AGGREGATION_WHITELIST = ["mean", "sum", "min", "max", "median", "std", "count"]
 GROUP_BY_WHITELIST = ["hour", "day", "month", "weekday", "year", "date"]
 
 
-def _validate_column(manager: DatasetManager, column: str) -> str | None:
-    columns = manager.get_columns()
+def _validate_column(manager: DatasetManager, column: str, dataset_name: str | None = None) -> str | None:
+    columns = manager.get_columns(dataset_name)
     if column not in columns:
         return f"Column '{column}' not found in dataset. Valid columns are: {columns}"
     return None
+
+
+def _dataset_not_found(manager: DatasetManager, dataset_name: str) -> str:
+    return (
+        f"Dataset '{dataset_name}' không tồn tại. Các dataset hiện có: "
+        f"{manager.list_datasets()}"
+    )
 
 
 def _validate_aggregation(aggregation: str) -> str | None:
@@ -24,11 +31,21 @@ def _to_json_number(value):
     return float(value) if pd.notna(value) else None
 
 
-def get_dataset_summary(manager: DatasetManager) -> dict:
+def get_dataset_summary(manager: DatasetManager, dataset_name: str | None = None) -> dict:
+    """
+    dataset_name=None -> summary của dataset active, KÈM THÊM danh sách tất cả dataset
+    đã upload (tên/rows/cols) để agent biết có file nào mà chọn dataset_name cho lần
+    gọi tool tiếp theo. dataset_name=chuỗi cụ thể -> chỉ summary của dataset đó, không
+    kèm danh sách tất cả (đã biết rõ mình đang hỏi cái nào).
+    """
     try:
-        df = manager.get_dataframe()
-        columns = manager.get_columns()
-        numeric_columns = manager.get_numeric_columns()
+        df = manager.get_dataframe(dataset_name)
+        if df is None:
+            return failure(_dataset_not_found(manager, dataset_name))
+
+        resolved_name = dataset_name or manager.get_active_name()
+        columns = manager.get_columns(dataset_name)
+        numeric_columns = manager.get_numeric_columns(dataset_name)
 
         if "datetime" in df.columns:
             date_range = {"min": str(df["datetime"].min()), "max": str(df["datetime"].max())}
@@ -37,15 +54,26 @@ def get_dataset_summary(manager: DatasetManager) -> dict:
 
         dtypes = {col: str(dtype) for col, dtype in df.dtypes.items()}
 
-        return success(
-            {
-                "row_count": len(df),
-                "columns": columns,
-                "numeric_columns": numeric_columns,
-                "date_range": date_range,
-                "dtypes": dtypes,
-            }
-        )
+        result_data = {
+            "dataset_name": resolved_name,
+            "row_count": len(df),
+            "columns": columns,
+            "numeric_columns": numeric_columns,
+            "date_range": date_range,
+            "dtypes": dtypes,
+        }
+
+        if dataset_name is None:
+            result_data["all_datasets"] = [
+                {
+                    "name": name,
+                    "row_count": len(manager.get_dataframe(name)),
+                    "column_count": len(manager.get_columns(name)),
+                }
+                for name in manager.list_datasets()
+            ]
+
+        return success(result_data)
     except Exception as exc:
         return failure(str(exc))
 
@@ -56,9 +84,14 @@ def aggregate_metric(
     aggregation: str,
     start_date: str | None = None,
     end_date: str | None = None,
+    dataset_name: str | None = None,
 ) -> dict:
     try:
-        col_error = _validate_column(manager, column)
+        df = manager.get_dataframe(dataset_name)
+        if df is None:
+            return failure(_dataset_not_found(manager, dataset_name))
+
+        col_error = _validate_column(manager, column, dataset_name)
         if col_error:
             return failure(col_error)
 
@@ -66,7 +99,6 @@ def aggregate_metric(
         if agg_error:
             return failure(agg_error)
 
-        df = manager.get_dataframe()
         date_range_applied = {"start_date": start_date, "end_date": end_date}
 
         filtered = df
@@ -106,9 +138,16 @@ def aggregate_metric(
         return failure(str(exc))
 
 
-def group_metric(manager: DatasetManager, column: str, aggregation: str, group_by: str) -> dict:
+def group_metric(
+    manager: DatasetManager, column: str, aggregation: str, group_by: str,
+    dataset_name: str | None = None,
+) -> dict:
     try:
-        col_error = _validate_column(manager, column)
+        df = manager.get_dataframe(dataset_name)
+        if df is None:
+            return failure(_dataset_not_found(manager, dataset_name))
+
+        col_error = _validate_column(manager, column, dataset_name)
         if col_error:
             return failure(col_error)
 
@@ -119,9 +158,11 @@ def group_metric(manager: DatasetManager, column: str, aggregation: str, group_b
         if group_by not in GROUP_BY_WHITELIST:
             return failure(f"group_by '{group_by}' not allowed. Valid group_by values are: {GROUP_BY_WHITELIST}")
 
-        df = manager.get_dataframe()
         if group_by not in df.columns:
-            return failure(f"Column '{group_by}' not found in dataset. Valid columns are: {manager.get_columns()}")
+            return failure(
+                f"Column '{group_by}' not found in dataset. Valid columns are: "
+                f"{manager.get_columns(dataset_name)}"
+            )
 
         grouped = df.groupby(group_by)[column]
         result_series = getattr(grouped, aggregation)().sort_index()
@@ -139,16 +180,21 @@ def group_metric(manager: DatasetManager, column: str, aggregation: str, group_b
         return failure(str(exc))
 
 
-def find_peak(manager: DatasetManager, column: str, mode: str = "max") -> dict:
+def find_peak(
+    manager: DatasetManager, column: str, mode: str = "max", dataset_name: str | None = None,
+) -> dict:
     try:
-        col_error = _validate_column(manager, column)
+        df = manager.get_dataframe(dataset_name)
+        if df is None:
+            return failure(_dataset_not_found(manager, dataset_name))
+
+        col_error = _validate_column(manager, column, dataset_name)
         if col_error:
             return failure(col_error)
 
         if mode not in ("max", "min"):
             return failure(f"mode '{mode}' not allowed. Valid modes are: ['max', 'min']")
 
-        df = manager.get_dataframe()
         if len(df) == 0:
             return failure("Dataset is empty.")
 
@@ -182,9 +228,14 @@ def compare_periods(
     period_b_start: str,
     period_b_end: str,
     aggregation: str = "mean",
+    dataset_name: str | None = None,
 ) -> dict:
     try:
-        col_error = _validate_column(manager, column)
+        df = manager.get_dataframe(dataset_name)
+        if df is None:
+            return failure(_dataset_not_found(manager, dataset_name))
+
+        col_error = _validate_column(manager, column, dataset_name)
         if col_error:
             return failure(col_error)
 
@@ -192,7 +243,6 @@ def compare_periods(
         if agg_error:
             return failure(agg_error)
 
-        df = manager.get_dataframe()
         if "datetime" not in df.columns:
             return failure("Dataset has no 'datetime' column; cannot filter by period.")
 
@@ -260,17 +310,21 @@ def calculate_correlation(
     column_b: str,
     start_date: str | None = None,
     end_date: str | None = None,
+    dataset_name: str | None = None,
 ) -> dict:
     try:
-        col_a_error = _validate_column(manager, column_a)
+        df = manager.get_dataframe(dataset_name)
+        if df is None:
+            return failure(_dataset_not_found(manager, dataset_name))
+
+        col_a_error = _validate_column(manager, column_a, dataset_name)
         if col_a_error:
             return failure(col_a_error)
 
-        col_b_error = _validate_column(manager, column_b)
+        col_b_error = _validate_column(manager, column_b, dataset_name)
         if col_b_error:
             return failure(col_b_error)
 
-        df = manager.get_dataframe()
         filtered = df
 
         if start_date is not None or end_date is not None:
