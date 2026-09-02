@@ -1,0 +1,143 @@
+=== GOLD EVIDENCE VERIFICATION LOG ===
+Ngày: 2026-09-02
+Phương pháp: gọi rag/retriever.py::retrieve() THẬT (không qua LLM, không đoán), với
+top_k=10 mặc định (khớp SETTINGS.rag_top_k). Với mỗi case kb_qa/both, dùng
+answer_must_contain_any đã có sẵn trong cases.jsonl làm needle để xác định chunk nào
+chứa thông tin đúng. Nếu không tìm thấy trong top-10, mở rộng top_k (30/50/100) để tìm
+rank thật, ghi nhận trung thực kể cả khi vượt xa top-10/top-K mặc định của hệ thống.
+
+--- PHÁT HIỆN QUAN TRỌNG TRƯỚC KHI ĐỌC BẢNG DƯỚI ---
+
+1. Với nhóm "both", answer_must_contain_any là KẾT QUẢ ĐÃ TÍNH TOÁN (vd 40.000 =
+   2.000.000 kWh × 2%), KHÔNG PHẢI chuỗi có sẵn trong văn bản gốc. Lần đầu tìm theo
+   needle = kết quả tính → thất bại hoàn toàn cho both_001/both_005, và bắt NHẦM cho
+   both_004 (khớp "3000" ở 1 đoạn EVN Annual Report 2022-2023 không liên quan, thay vì
+   đúng điều khoản Chỉ thị 20 "30%"). Đã sửa: tìm lại theo TỶ LỆ/số liệu GỐC dùng để
+   tính (vd "2%", "5%", "30%", "3%", "40%") — đọc trực tiếp kb/raw/chi_thi_20_2023.txt
+   để xác nhận đúng 4 điều khoản % (dòng 5: cả nước 2,0%; dòng 11: cơ quan 5,0%; dòng 13:
+   chiếu sáng công cộng 30%; dòng 19: cơ sở sản xuất 2%) trước khi verify lại.
+
+2. kb_009 ("Theo Chỉ thị 20, tổn thất điện năng cần giảm xuống dưới bao nhiêu % vào
+   2025?", đáp án "6%"): chunk chứa ĐÚNG câu trả lời (Chỉ thị 20, page=0: "Giảm tổn thất
+   điện năng trên toàn hệ thống điện dưới 6% vào năm 2025") ĐÃ XÁC NHẬN tồn tại thật
+   trong ChromaDB (đọc trực tiếp qua client.get(where={"source_id": "chi_thi_20_2023"})),
+   nhưng KHÔNG xuất hiện trong top-100 kết quả retrieve() cho chính câu hỏi này (đã thử
+   top_k=10/30/100, tổng corpus 6.127 chunks). Đây là retrieval failure THẬT — nghi ngờ
+   do câu hỏi kb_009 có nhiều từ khóa trùng "tổn thất điện năng" với các EVN Annual
+   Report (chủ đề riêng, tần suất xuất hiện cao trong corpus), kéo embedding câu hỏi
+   lệch xa khỏi chunk Chỉ thị 20 duy nhất. Vì eval suite chính thức từng ghi kb_009 PASS
+   (content check khớp "6%"), rủi ro thật: agent có thể đã lấy số "6%" từ 1 nguồn KHÁC
+   không phải Chỉ thị 20 (vd Energy Efficiency 2024 p.104, cũng chứa literal "6%" không
+   liên quan) — tức câu trả lời đúng SỐ nhưng có thể trích dẫn SAI nguồn, content-check
+   không phát hiện được lỗi này. Ghi nhận rank="not_found_in_top100" cho case này, KHÔNG
+   ép về 1 con số rank giả.
+
+3. kb_012 ("...bao nhiêu quốc gia đã áp dụng hoặc đang xây dựng tiêu chuẩn/nhãn năng
+   lượng bắt buộc...", đáp án "120"): chunk đúng (Energy Efficiency 2024, p.33) nằm ở
+   rank=11 — NGOÀI top-10 mặc định (SETTINGS.rag_top_k=10) mà agent thật sự dùng lúc
+   chạy. Với top_k mặc định, agent sẽ KHÔNG thấy chunk này.
+
+4. both_006: câu hỏi diễn đạt dài/khác kb_013 (dù cùng chủ đề "tốc độ tăng trưởng nhu
+   cầu điện toàn cầu 3%/năm của IEA") → retrieve() trả về chunk KHÁC hẳn cho 2 câu hỏi
+   này (kb_013: World Energy Outlook 2025 p.174 rank=1; both_006: World Energy Outlook
+   2019 p.259 rank=3) — cả 2 đều chứa đúng "3%" và đều hợp lệ, nhưng minh chứng retrieval
+   phụ thuộc mạnh vào cách diễn đạt câu hỏi (query phrasing sensitivity), không chỉ vào
+   chủ đề.
+
+--- BẢNG KẾT QUẢ ĐẦY ĐỦ (21 case) ---
+
+kb_001 | needle="99.74" | gold: EVN Annual Report 2024-2025, p.9, rank=4, distance=0.9334
+  | alt: EVN Annual Report 2022-2023, p.9, rank=5, distance=0.9574
+
+kb_002 | needle="253,5"/"253.5"/"253,053" | gold: EVN Annual Report 2022-2023, p.9, rank=4, distance=1.0071
+  | alt1: EVN Annual Report 2022-2023, p.10, rank=8, distance=1.0529
+  | alt2: EVN Annual Report 2024-2025, p.9, rank=10, distance=1.0607
+
+kb_003 | needle="6.05" | gold: EVN Annual Report 2022-2023, p.10, rank=4, distance=0.8111
+
+kb_004 | needle="271.68"/"280,814" | gold: EVN Annual Report 2022-2023, p.10, rank=3, distance=0.7897
+  | alt: EVN Annual Report 2024-2025, p.7, rank=10, distance=0.8587
+
+kb_005 | needle="1994" | gold: EVN Annual Report 2024-2025, p.6, rank=1, distance=0.7996
+  | alt: EVN Annual Report 2022-2023, p.5, rank=3, distance=0.934
+
+kb_006 | needle="2,0%"/"2%" | gold: Chỉ thị 20/CT-TTg, p.0, rank=1, distance=0.7792
+  | alt: Chỉ thị 20/CT-TTg, p.1, rank=2, distance=0.8422
+
+kb_007 | needle="Thủ tướng" | gold: Chỉ thị 20/CT-TTg, p.12, rank=1, distance=1.0053
+  | alt1: Chỉ thị 20/CT-TTg, p.2, rank=4, distance=1.1774
+  | alt2: Chỉ thị 20/CT-TTg, p.0, rank=7, distance=1.2459
+
+kb_008 | needle="26" | gold: Chỉ thị 20/CT-TTg, p.1, rank=1, distance=0.9603
+  | alt: Energy Efficiency 2025, p.71, rank=4, distance=1.1305
+
+kb_009 | needle="6%" | gold: Chỉ thị 20/CT-TTg, p.0, rank=NOT_FOUND_IN_TOP100
+  | (xác nhận nội dung đúng tồn tại thật qua đọc trực tiếp ChromaDB — xem phát hiện #2
+  | ở trên. Đây KHÔNG phải suy đoán — page=0 chunk đã đọc nguyên văn, có chứa "dưới 6%
+  | vào năm 2025", nhưng retrieve() không trả về chunk này dù mở rộng top_k=100.)
+
+kb_010 | needle="30%" | gold: Chỉ thị 20/CT-TTg, p.1, rank=3, distance=0.9048
+
+kb_011 | needle="110" | gold: Energy Efficiency 2023, p.82, rank=2, distance=0.8681
+
+kb_012 | needle="120" | gold: Energy Efficiency 2024, p.33, rank=11 (NGOÀI top-10 mặc
+  | định — xem phát hiện #3 ở trên), distance=1.0503
+
+kb_013 | needle="3%" | gold: World Energy Outlook 2025, p.174, rank=1, distance=0.8233
+  | alt1: Energy Efficiency 2025, p.16, rank=2, distance=0.8308
+  | alt2: World Energy Outlook 2024, p.122, rank=7, distance=0.8863
+  | alt3: Energy Efficiency 2023, p.22, rank=8, distance=0.8902
+
+kb_014 | needle="40%" | gold: Energy Efficiency 2024, p.104, rank=2, distance=0.901
+  | alt1: World Energy Outlook 2025, p.404, rank=4, distance=0.9092
+  | alt2: World Energy Outlook 2024, p.122, rank=6, distance=0.9209
+  | alt3: World Energy Outlook 2024, p.275, rank=8, distance=0.9305
+  | alt4: World Energy Outlook 2020, p.221, rank=9, distance=0.931
+
+both_001 | needle="2%" (rate gốc, KHÔNG phải 40.000 đã tính) | gold: Chỉ thị 20/CT-TTg,
+  | p.1, rank=1, distance=0.7607
+
+both_002 | needle="5,0%" (rate gốc, KHÔNG phải 25.000 đã tính) | gold: Chỉ thị 20/CT-TTg,
+  | p.1, rank=1, distance=0.6639
+
+both_003 | needle="6.05" VÀ "271.68" (cả 2 cùng nằm trong 1 chunk) | gold: EVN Annual
+  | Report 2022-2023, p.10, rank=5, distance=0.8875 (chunk này đồng thời chứa tỷ lệ tổn
+  | thất 6.05% và tổng sản lượng 271.68 — đủ dữ kiện tính 16.4 tỷ kWh)
+
+both_004 | needle="30%" (rate gốc, KHÔNG phải 3.000 đã tính) | gold: Chỉ thị 20/CT-TTg,
+  | p.1, rank=1, distance=0.8772
+
+both_005 | needle="2%" (rate gốc, KHÔNG phải 60.000 đã tính, giống both_001) | gold:
+  | Chỉ thị 20/CT-TTg, p.1, rank=1, distance=0.7195
+
+both_006 | needle="3%" (rate gốc, KHÔNG phải 15.000 đã tính) | gold: World Energy
+  | Outlook 2019, p.259, rank=3, distance=0.9566 (KHÁC kb_013 dù cùng chủ đề — xem phát
+  | hiện #4 ở trên)
+
+both_007 | needle="40%" (rate gốc, KHÔNG phải 800 đã tính) | gold: Energy Efficiency
+  | 2024, p.104, rank=3, distance=0.898 (trùng nguồn với kb_014)
+
+--- GHI CHÚ QUAN TRỌNG: gold_evidence (Bước 1) vs retrieval metrics thật (Bước 3) ---
+
+gold_evidence ở trên được xác định bằng cách gọi retrieve() TRỰC TIẾP với ĐÚNG câu hỏi
+GỐC nguyên văn từ cases.jsonl (không qua LLM) — mục đích: xác định ground truth "chunk
+nào chứa thông tin đúng", độc lập với cách agent diễn đạt query.
+
+Khi chạy dry-run kiểm thử code Bước 3 (evaluate_case() qua Agent thật), phát hiện thêm:
+kb_009 tìm thấy ĐÚNG nguồn ở rank=1 (không phải "not_found" như khi gọi retrieve() thô)
+— vì Agent's LLM tự viết lại query khi gọi search_knowledge_base (không truyền nguyên
+văn câu hỏi gốc), query khác → kết quả khác hẳn. Đây là bằng chứng: retrieval quality
+phụ thuộc mạnh vào cách diễn đạt query, và LLM query-rewriting đôi khi (không đảm bảo
+luôn luôn, do non-determinism) giúp tránh được vấn đề embedding lệch của câu hỏi gốc.
+KHÔNG rút lại phát hiện #2 ở trên (chunk đúng thật sự không nằm trong top-100 CHO CÂU
+HỎI GỐC THÔ) — 2 phép đo phục vụ 2 mục đích khác nhau, không mâu thuẫn: gold_evidence
+= ground truth cố định; retrieval metrics ở run_evals.py (Bước 3) = đo hành vi THẬT của
+hệ thống qua trace agent thật, sẽ phản ánh đúng tỷ lệ thành công thật khi chạy full eval.
+
+--- TỔNG KẾT ---
+21/21 case có gold_evidence xác nhận bằng retrieve() thật.
+20/21 case tìm thấy trong phạm vi hợp lý (top-11 trở xuống).
+1/21 case (kb_009) hoàn toàn không tìm thấy trong top-100 — ghi nhận là retrieval gap
+thật, không ép số liệu giả.
+1/21 case (kb_012) nằm ngay ngoài top-10 mặc định của hệ thống (rank=11) — cảnh báo có
+thể ảnh hưởng Recall@10 thật khi agent chạy với top_k=10 mặc định.

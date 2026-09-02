@@ -46,11 +46,19 @@ python -m venv .venv
 pip install -r requirements.txt
 copy .env.example .env              # điền OPENROUTER_API_KEY thật vào .env
 python scripts/prepare_data.py      # tải + xử lý dataset Tetouan
-python scripts/ingest_kb.py         # nạp toàn bộ tài liệu KB vào ChromaDB
+python scripts/ingest_kb.py         # nạp toàn bộ tài liệu KB vào ChromaDB — CHỈ CẦN CHẠY 1 LẦN
+                                     # (an toàn chạy lại nhiều lần, dùng upsert không nhân đôi
+                                     # dữ liệu). 17 nguồn, ~3.1 triệu token embedding, chi phí
+                                     # dưới $0.10 (đo thật, xem output/COST.md). Không có
+                                     # bước này, storage/chroma/ rỗng và RAG sẽ trả về rỗng.
 streamlit run app.py
 ```
 
 ## Chạy bằng Docker
+
+Chạy `python scripts/ingest_kb.py` trên host TRƯỚC (xem mục Cài đặt và chạy ở trên) —
+lệnh `docker run` bên dưới mount `storage/chroma/` từ host vào container, nên container
+dùng chung dữ liệu đã ingest, không tự ingest lại bên trong.
 
 ```bash
 docker build -t electricity-agent .
@@ -87,9 +95,11 @@ app.py      Streamlit UI
 
 Hệ thống được đánh giá deterministic ở routing (chọn đúng nhánh Data/KB/Both), tool calling
 (đúng công cụ và tham số), kết quả số (qua Pandas, không phải LLM tự tính), và answerability
-(từ chối đúng khi ngoài phạm vi dữ liệu). Chưa triển khai formal Recall@K/MRR/citation
-precision hay LLM-as-a-Judge cho chất lượng ngữ nghĩa câu trả lời — đây là hướng mở rộng V2
-(đã tham khảo phương pháp từ dataquestio/tutorials/evaluating-llm-outputs, xem DATA_SOURCES.md).
+(từ chối đúng khi ngoài phạm vi dữ liệu). Từ Phase 0 (xem mục "Retrieval quality" bên dưới) đã
+có formal Recall@5/Recall@10/MRR/Citation correctness dựa trên `gold_evidence` verify bằng
+`retrieve()` thật cho 21 câu kb_qa/both (xem `evals/gold_evidence_verification.log`). Chưa có
+LLM-as-a-Judge cho chất lượng ngữ nghĩa câu trả lời — vẫn là hướng mở rộng V2 (đã tham khảo
+phương pháp từ dataquestio/tutorials/evaluating-llm-outputs, xem DATA_SOURCES.md).
 
 **Bộ 53 câu hỏi, 8 category — kết quả chính thức:**
 
@@ -107,6 +117,27 @@ precision hay LLM-as-a-Judge cho chất lượng ngữ nghĩa câu trả lời �
 
 Chi phí: $0.310503 cho 53 câu (~$0.0059/câu). Latency trung bình: 21.4s/câu.
 3 case fail còn lại đều đã điều tra rõ nguyên nhân (không phải bug), xem DATA_SOURCES.md.
+
+### Retrieval quality (Phase 0, đo 2026-09-02 — `evals/baselines/v1_baseline.json`)
+
+Bảng trên là baseline gốc (01/09). Bảng dưới đây là lần chạy full eval **riêng** ngày 02/09 sau
+khi thêm `gold_evidence` + 4 metric retrieval formal vào `evals/run_evals.py` — accuracy khác
+với bảng trên (92.45% thay vì 96.2%) một phần do 2 câu (`kb_009`, `kb_010`) mất kết nối mạng
+thật giữa chừng (retry 3 lần đều fail), không phải regression logic — chi tiết đầy đủ trong
+`evals/gold_evidence_verification.log` và field `notes` của `v1_baseline.json`.
+
+| Metric | Giá trị |
+|--------|---------|
+| Recall@5 | 84.2% |
+| Recall@10 | 84.2% |
+| MRR | 0.5912 |
+| Citation correctness | 73.7% |
+| Overall accuracy | 92.45% (49/53) |
+
+Ghi chú: 2 câu (`kb_009`, `kb_010`) fail do lỗi mạng, không phải bug. 1 câu (`kb_012`) là giới
+hạn retrieval thật — gold evidence xếp hạng 11, ngoài top-10 mặc định của hệ thống (nhất quán
+qua cả 2 lần chạy độc lập). `both_007` là vấn đề search-until-exhausted đã biết từ trước, không
+ổn định qua các lần chạy.
 
 ## Giới hạn đã biết
 - Cross-lingual retrieval gap (câu hỏi tiếng Việt match kém hơn tiếng Anh với cùng nội dung)

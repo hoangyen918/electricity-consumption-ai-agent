@@ -1,0 +1,244 @@
+{
+  "timestamp": "2026-09-02T08:23:27.902025+00:00",
+  "total_cases": 53,
+  "passed": 49,
+  "overall_accuracy": 0.9245,
+  "accuracy": 0.9245,
+  "retrieval": {
+    "n_cases_with_gold_evidence": 19,
+    "recall_at_5": 0.8421,
+    "recall_at_10": 0.8421,
+    "mrr": 0.5912,
+    "citation_correctness_rate": 0.7368,
+    "per_case": [
+      {
+        "id": "kb_001",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 2,
+        "citation_correct": true
+      },
+      {
+        "id": "kb_002",
+        "recall_5": false,
+        "recall_10": false,
+        "rank": null,
+        "citation_correct": true
+      },
+      {
+        "id": "kb_003",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 1,
+        "citation_correct": true
+      },
+      {
+        "id": "kb_004",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 5,
+        "citation_correct": true
+      },
+      {
+        "id": "kb_005",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 1,
+        "citation_correct": true
+      },
+      {
+        "id": "kb_006",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 2,
+        "citation_correct": true
+      },
+      {
+        "id": "kb_007",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 1,
+        "citation_correct": true
+      },
+      {
+        "id": "kb_008",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 1,
+        "citation_correct": true
+      },
+      {
+        "id": "kb_011",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 1,
+        "citation_correct": true
+      },
+      {
+        "id": "kb_012",
+        "recall_5": false,
+        "recall_10": false,
+        "rank": null,
+        "citation_correct": false
+      },
+      {
+        "id": "kb_013",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 1,
+        "citation_correct": false
+      },
+      {
+        "id": "kb_014",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 2,
+        "citation_correct": false
+      },
+      {
+        "id": "both_001",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 1,
+        "citation_correct": true
+      },
+      {
+        "id": "both_002",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 1,
+        "citation_correct": true
+      },
+      {
+        "id": "both_003",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 5,
+        "citation_correct": true
+      },
+      {
+        "id": "both_004",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 2,
+        "citation_correct": true
+      },
+      {
+        "id": "both_005",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 2,
+        "citation_correct": true
+      },
+      {
+        "id": "both_006",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 3,
+        "citation_correct": false
+      },
+      {
+        "id": "both_007",
+        "recall_5": false,
+        "recall_10": false,
+        "rank": null,
+        "citation_correct": false
+      }
+    ]
+  },
+  "by_category": {
+    "data_simple": {
+      "total": 10,
+      "passed": 10,
+      "accuracy": 1.0
+    },
+    "group_compare": {
+      "total": 8,
+      "passed": 8,
+      "accuracy": 1.0
+    },
+    "multi_step": {
+      "total": 5,
+      "passed": 5,
+      "accuracy": 1.0
+    },
+    "kb_qa": {
+      "total": 14,
+      "passed": 11,
+      "accuracy": 0.7857
+    },
+    "both": {
+      "total": 7,
+      "passed": 6,
+      "accuracy": 0.8571
+    },
+    "error_handling": {
+      "total": 5,
+      "passed": 5,
+      "accuracy": 1.0
+    },
+    "prompt_injection": {
+      "total": 3,
+      "passed": 3,
+      "accuracy": 1.0
+    },
+    "parametric_override": {
+      "total": 1,
+      "passed": 1,
+      "accuracy": 1.0
+    }
+  },
+  "categories": {
+    "data_simple": {
+      "total": 10,
+      "passed": 10,
+      "accuracy": 1.0
+    },
+    "group_compare": {
+      "total": 8,
+      "passed": 8,
+      "accuracy": 1.0
+    },
+    "multi_step": {
+      "total": 5,
+      "passed": 5,
+      "accuracy": 1.0
+    },
+    "kb_qa": {
+      "total": 14,
+      "passed": 11,
+      "accuracy": 0.7857
+    },
+    "both": {
+      "total": 7,
+      "passed": 6,
+      "accuracy": 0.8571
+    },
+    "error_handling": {
+      "total": 5,
+      "passed": 5,
+      "accuracy": 1.0
+    },
+    "prompt_injection": {
+      "total": 3,
+      "passed": 3,
+      "accuracy": 1.0
+    },
+    "parametric_override": {
+      "total": 1,
+      "passed": 1,
+      "accuracy": 1.0
+    }
+  },
+  "total_cost_usd": 0.29967,
+  "average_latency_ms": 44901.2,
+  "notes": {
+    "network_affected_cases": [
+      "kb_009",
+      "kb_010"
+    ],
+    "known_retrieval_limitation": "kb_012 gold evidence at rank 11, outside top-10",
+    "known_agent_issue": "both_007 search-until-exhausted, intermittent",
+    "run_conditions": "network intermittently unstable, 2 cases lost to connection errors"
+  }
+}

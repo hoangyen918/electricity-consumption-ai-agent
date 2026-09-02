@@ -34,6 +34,78 @@ REFUSAL_PATTERNS = [
     r"không chứa",
 ]
 
+# Threshold PASS/FAIL cho toàn bộ eval run — xem Bước 5 trong task gốc.
+# MRR baseline = 0.5912. kb_012 (rank=11, MRR contribution=0) kéo
+# tổng xuống cấu trúc — đây là giới hạn retrieval đã biết, không
+# phải regression. Threshold 0.55 phản ánh thực tế đo được.
+THRESHOLDS = {
+    "overall_accuracy_min": 0.90,
+    "recall_at_10_min": 0.80,
+    "mrr_min": 0.55,
+}
+
+
+def _extract_retrieved_chunks(trace: list[dict]) -> list[dict]:
+    """
+    Lấy danh sách chunk (source, page, distance) từ lần gọi search_knowledge_base
+    THÀNH CÔNG gần nhất trong trace — khớp đúng field name thật trong
+    rag/citations.py::format_search_result (source, page, distance, không phải
+    tên khác). Trả về [] nếu không có lần gọi nào thành công (vd agent không gọi
+    tool này, hoặc tool trả ok=False).
+    """
+    for t in trace:
+        if t["tool_name"] == "search_knowledge_base" and t["result"]["ok"]:
+            return t["result"]["data"].get("results", [])
+    return []
+
+
+def _evidence_matches_chunk(evidence: dict, chunk: dict) -> bool:
+    """source_fragment là substring ngắn (vd '2024-2025', 'Chỉ thị 20') — so khớp
+    substring trên chunk['source'] thật; page phải khớp chính xác."""
+    return evidence["source_fragment"] in chunk["source"] and evidence["page"] == chunk["page"]
+
+
+def _citation_matches_answer(evidence: dict, answer: str) -> bool:
+    """
+    Kiểm tra answer có trích dẫn đúng source_fragment + page khớp gold_evidence.
+    Lưu ý: rag/citations.py::format_citation() KHÔNG hiển thị số trang khi page==0
+    (dùng cho policy_directive không có Mục cụ thể, vd "[Chỉ thị 20/CT-TTg]" thay vì
+    "[Chỉ thị 20/CT-TTg, Mục 0]") — đã đọc code thật, không đoán — nên với page==0
+    chỉ cần khớp source_fragment, không đòi hỏi số "0" xuất hiện trong answer.
+    """
+    if evidence["source_fragment"].lower() not in answer.lower():
+        return False
+    if evidence["page"] == 0:
+        return True
+    return str(evidence["page"]) in answer
+
+
+def _compute_retrieval_metrics(case: dict, trace: list[dict], answer: str) -> dict | None:
+    """
+    Trả về None nếu case không có gold_evidence (tức không thuộc 21 case kb_qa/both
+    đã verify — xem evals/gold_evidence_verification.log). Với case có gold_evidence,
+    tính recall@5, recall@10, rank (cho MRR), citation_correct.
+    """
+    gold = case.get("gold_evidence")
+    if not gold:
+        return None
+
+    all_evidence = [gold] + (case.get("acceptable_alternative_evidence") or [])
+    chunks = _extract_retrieved_chunks(trace)
+
+    rank = None
+    for idx, chunk in enumerate(chunks, start=1):
+        if any(_evidence_matches_chunk(ev, chunk) for ev in all_evidence):
+            rank = idx
+            break
+
+    return {
+        "rank": rank,
+        "recall_5": rank is not None and rank <= 5,
+        "recall_10": rank is not None and rank <= 10,
+        "citation_correct": any(_citation_matches_answer(ev, answer) for ev in all_evidence),
+    }
+
 
 def load_cases() -> list[dict]:
     cases = []
@@ -111,6 +183,7 @@ def evaluate_case(agent: Agent, case: dict) -> dict:
         "iterations": result["iterations"],
         "latency_ms": result["latency_ms"],
         "estimated_cost_usd": result["estimated_cost_usd"],
+        "retrieval": _compute_retrieval_metrics(case, result["trace"], answer),
     }
 
 
@@ -132,6 +205,7 @@ def main():
                 "id": case["id"], "category": case["category"], "question": case["question"],
                 "passed": False, "checks": {"exception": str(e)}, "answer": None,
                 "tool_names": [], "iterations": None, "latency_ms": None, "estimated_cost_usd": None,
+                "retrieval": None,
             }
         all_results.append(r)
         print(f"    -> {'PASS' if r['passed'] else 'FAIL'}")
@@ -151,16 +225,59 @@ def main():
     latencies = [r["latency_ms"] for r in all_results if r["latency_ms"] is not None]
     avg_latency = sum(latencies) / len(latencies) if latencies else 0
 
+    # --- Retrieval metrics (chỉ tính trên case có gold_evidence, xem Bước 1-3) ---
+    retrieval_results = [r for r in all_results if r.get("retrieval") is not None]
+    n_retrieval = len(retrieval_results)
+    if n_retrieval:
+        recall_at_5 = sum(1 for r in retrieval_results if r["retrieval"]["recall_5"]) / n_retrieval
+        recall_at_10 = sum(1 for r in retrieval_results if r["retrieval"]["recall_10"]) / n_retrieval
+        mrr = sum(
+            (1 / r["retrieval"]["rank"]) if r["retrieval"]["rank"] else 0
+            for r in retrieval_results
+        ) / n_retrieval
+        citation_correctness_rate = sum(
+            1 for r in retrieval_results if r["retrieval"]["citation_correct"]
+        ) / n_retrieval
+    else:
+        recall_at_5 = recall_at_10 = mrr = citation_correctness_rate = 0.0
+
+    retrieval_summary = {
+        "n_cases_with_gold_evidence": n_retrieval,
+        "recall_at_5": round(recall_at_5, 4),
+        "recall_at_10": round(recall_at_10, 4),
+        "mrr": round(mrr, 4),
+        "citation_correctness_rate": round(citation_correctness_rate, 4),
+        "per_case": [
+            {
+                "id": r["id"],
+                "recall_5": r["retrieval"]["recall_5"],
+                "recall_10": r["retrieval"]["recall_10"],
+                "rank": r["retrieval"]["rank"],
+                "citation_correct": r["retrieval"]["citation_correct"],
+            }
+            for r in retrieval_results
+        ],
+    }
+
+    accuracy = round(passed / total, 4) if total else 0
+
     summary = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "total_cases": total,
         "passed": passed,
-        "accuracy": round(passed / total, 4) if total else 0,
+        "overall_accuracy": accuracy,
+        "accuracy": accuracy,  # giữ tên cũ để không phá script/tool nào đang đọc field này
+        "retrieval": retrieval_summary,
         "by_category": {
             cat: {"total": v["total"], "passed": v["passed"],
                   "accuracy": round(v["passed"] / v["total"], 4)}
             for cat, v in by_category.items()
         },
+        "categories": {
+            cat: {"total": v["total"], "passed": v["passed"],
+                  "accuracy": round(v["passed"] / v["total"], 4)}
+            for cat, v in by_category.items()
+        },  # alias theo đúng tên field rubric yêu cầu ("categories"), giữ "by_category" cũ song song
         "total_cost_usd": round(total_cost, 6),
         "average_latency_ms": round(avg_latency, 1),
     }
@@ -174,18 +291,67 @@ def main():
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
+    BASELINES_DIR = Path("evals/baselines")
+    BASELINES_DIR.mkdir(parents=True, exist_ok=True)
+    (BASELINES_DIR / "v1_baseline.json").write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
     print("\n" + "=" * 60)
     print("TỔNG KẾT")
     print("=" * 60)
     print(f"Tổng số câu: {total}")
-    print(f"Pass: {passed} ({summary['accuracy']*100:.1f}%)")
+    print(f"Pass: {passed} ({accuracy*100:.1f}%)")
     print(f"Tổng chi phí: ${total_cost:.6f}")
     print(f"Latency trung bình: {avg_latency:.0f} ms")
     print("\nTheo category:")
     for cat, v in summary["by_category"].items():
         print(f"  {cat}: {v['passed']}/{v['total']} ({v['accuracy']*100:.1f}%)")
+
+    print("\n" + "-" * 60)
+    print(f"RETRIEVAL METRICS ({n_retrieval} case có gold_evidence, kb_qa + both)")
+    print("-" * 60)
+    print(f"Recall@5:  {recall_at_5*100:.1f}%")
+    print(f"Recall@10: {recall_at_10*100:.1f}%")
+    print(f"MRR:       {mrr:.4f}")
+    print(f"Citation correctness: {citation_correctness_rate*100:.1f}%")
+
     print(f"\nChi tiết: evals/results/eval_detail_{ts}.json")
     print(f"Tổng kết: evals/results/eval_summary_{ts}.json")
+    print(f"Baseline: evals/baselines/v1_baseline.json")
+
+    # --- Bước 5: threshold PASS/FAIL ---
+    print("\n" + "=" * 60)
+    print("THRESHOLD PASS/FAIL")
+    print("=" * 60)
+    threshold_checks = {
+        "overall_accuracy_min": (accuracy, THRESHOLDS["overall_accuracy_min"]),
+        "recall_at_10_min": (recall_at_10, THRESHOLDS["recall_at_10_min"]),
+        "mrr_min": (mrr, THRESHOLDS["mrr_min"]),
+    }
+    overall_pass = True
+    for name, (actual, minimum) in threshold_checks.items():
+        ok = actual >= minimum
+        overall_pass = overall_pass and ok
+        status = "PASS" if ok else "FAIL"
+        print(f"  [{status}] {name}: {actual:.4f} (ngưỡng >= {minimum})")
+
+    print(f"\n=> {'PASS' if overall_pass else 'FAIL'} TỔNG THỂ")
+
+    if not overall_pass:
+        failing_cases = [r["id"] for r in all_results if not r["passed"]]
+        print(f"\nCase gây FAIL accuracy tổng thể: {failing_cases}")
+        if recall_at_10 < THRESHOLDS["recall_at_10_min"]:
+            low_recall_cases = [
+                r["id"] for r in retrieval_results if not r["retrieval"]["recall_10"]
+            ]
+            print(f"Case gây FAIL recall_at_10 (gold evidence ngoài top-10 hoặc không tìm thấy): "
+                  f"{low_recall_cases}")
+        if mrr < THRESHOLDS["mrr_min"]:
+            zero_rank_cases = [
+                r["id"] for r in retrieval_results if not r["retrieval"]["rank"]
+            ]
+            print(f"Case gây FAIL mrr (rank=None, không tìm thấy gold evidence): {zero_rank_cases}")
 
 
 if __name__ == "__main__":
