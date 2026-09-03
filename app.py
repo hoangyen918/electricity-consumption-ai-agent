@@ -395,38 +395,40 @@ def render_trace_expander(trace_info: dict):
 
         # --- Phần 2: Đánh giá câu trả lời (live eval per-question) ---
         st.divider()
-        st.write("**📝 Đánh giá câu trả lời:**")
 
         answerability = _classify_answerability(answer)
-        st.caption(f"Answerability: **{answerability}**")
 
-        if search_chunks:
-            matches_retrieved_source = any(
-                c["source"].lower() in answer.lower() for c in search_chunks
-            )
-            # Overlap từ vựng chỉ tính cho chunk THỰC SỰ được trích (has_citation_marker
-            # + tên nguồn khớp) — lấy MAX nếu có nhiều chunk được trích (1 chunk khớp tốt
-            # là đủ bằng chứng câu trả lời có bám nội dung gốc, không cần TB cả nhóm).
-            cited_chunks = [
-                c for c in search_chunks
-                if has_citation_marker and c["source"].lower() in answer.lower()
-            ]
-            overlap_ratio = max(
-                (_word_overlap_ratio(answer, c["text"]) for c in cited_chunks), default=0.0
-            )
+        with st.container(border=True):
+            st.write("**📝 Đánh giá nhanh câu trả lời**")
+            if search_chunks:
+                matches_retrieved_source = any(
+                    c["source"].lower() in answer.lower() for c in search_chunks
+                )
+                # Overlap từ vựng chỉ tính cho chunk THỰC SỰ được trích (has_citation_marker
+                # + tên nguồn khớp) — lấy MAX nếu có nhiều chunk được trích (1 chunk khớp tốt
+                # là đủ bằng chứng câu trả lời có bám nội dung gốc, không cần TB cả nhóm).
+                cited_chunks = [
+                    c for c in search_chunks
+                    if has_citation_marker and c["source"].lower() in answer.lower()
+                ]
+                overlap_ratio = max(
+                    (_word_overlap_ratio(answer, c["text"]) for c in cited_chunks), default=0.0
+                )
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Trạng thái", answerability)
+                c2.metric("Dấu hiệu trích dẫn", "Có" if has_citation_marker else "Không")
+                c3.metric("Nguồn khớp answer", "Có" if matches_retrieved_source else "Không")
+                c4.metric("Liên quan từ vựng", f"{overlap_ratio*100:.0f}%")
+            else:
+                st.metric("Trạng thái", answerability)
             st.caption(
-                f"Có dấu hiệu trích dẫn: **{'Có' if has_citation_marker else 'Không'}** · "
-                f"Tên nguồn xuất hiện trong answer: **{'Có' if matches_retrieved_source else 'Không'}** · "
-                f"Độ liên quan từ vựng: **{overlap_ratio*100:.0f}%** (heuristic)"
+                "_Kiểm tra nhanh (heuristic), không phải xác nhận chính thức. "
+                "Đối chiếu chính xác (gold_evidence) chỉ có trong tab Đánh giá hệ thống._"
             )
-            st.caption(
-                "_Đây là kiểm tra nhanh (heuristic), không phải xác nhận chính thức. "
-                "Đối chiếu chính xác (gold_evidence, cả nguồn lẫn trang) chỉ có trong "
-                "53 case ở tab Đánh giá hệ thống._"
-            )
-            if has_citation_marker and overlap_ratio < 0.15:
-                st.warning("⚠️ Answer trích nguồn nhưng ít từ trùng với nội dung chunk "
-                           "— có thể agent diễn giải quá xa nội dung gốc, nên tự kiểm tra lại.")
+
+        if search_chunks and has_citation_marker and overlap_ratio < 0.15:
+            st.warning("⚠️ Answer trích nguồn nhưng ít từ trùng với nội dung chunk "
+                       "— có thể agent diễn giải quá xa nội dung gốc, nên tự kiểm tra lại.")
 
 
 def render_chat():
