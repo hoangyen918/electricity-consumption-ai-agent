@@ -89,6 +89,14 @@ def render_sidebar():
         st.header("⚡ Electricity Agent")
         st.caption(SETTINGS.app_title)
 
+        total_cost = sum(
+            msg["trace_info"]["estimated_cost_usd"]
+            for msg in st.session_state.get("chat_history", [])
+            if "trace_info" in msg
+        )
+        if total_cost > 0:
+            st.metric("💰 Tổng chi phí câu hỏi (phiên này)", f"${total_cost:.6f}")
+
         st.subheader("📊 Dataset")
         manager = st.session_state.dataset_manager
         if st.session_state.dataset_loaded:
@@ -108,6 +116,17 @@ def render_sidebar():
                     st.session_state.dataset_loaded = manager.is_loaded()
                     st.session_state.agent.reset()
                     st.session_state.chat_history = []
+                    st.rerun()
+
+            dataset_names = manager.list_datasets()
+            if len(dataset_names) > 1:
+                selected = st.sidebar.radio(
+                    "Xem trước dataset:",
+                    dataset_names,
+                    index=dataset_names.index(manager.get_active_name()),
+                )
+                if selected != manager.get_active_name():
+                    manager.switch_dataset(selected)
                     st.rerun()
 
             if active_name:
@@ -456,8 +475,8 @@ def render_chat():
 
 def main():
     init_session_state()
-    render_sidebar()
     render_chat()
+    render_sidebar()
 
 
 if __name__ == "__main__":
