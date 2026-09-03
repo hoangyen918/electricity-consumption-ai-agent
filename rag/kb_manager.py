@@ -115,9 +115,17 @@ def add_document(
     embeddings = embed_texts(texts, usage_accumulator=usage_accumulator)
     upsert_chunks(chunks, embeddings)
 
-    sources = load_sources()
-    sources.append(source_metadata)
-    save_sources(sources)
+    try:
+        sources = load_sources()
+        sources.append(source_metadata)
+        save_sources(sources)
+    except Exception as e:
+        collection = get_collection()
+        collection.delete(where={"source_id": source_id})
+        raise RuntimeError(
+            f"Ingest thất bại khi ghi kb/sources.json, đã rollback "
+            f"{len(chunks)} chunks vừa thêm cho '{source_id}': {e}"
+        ) from e
 
     duration_seconds = time.perf_counter() - start_time
     token_count = sum(usage_accumulator)

@@ -4,6 +4,7 @@ from unittest.mock import patch
 import pytest
 import rag.kb_manager as kb_manager
 from config.settings import SETTINGS
+from rag.vector_store import count_documents, get_collection
 from services.cost_tracker import calculate_embedding_cost
 
 
@@ -155,6 +156,50 @@ def test_add_document_reports_embedding_tokens_cost_and_duration():
         assert result["cost_usd"] == expected_cost
     finally:
         kb_manager.delete_document(result["source_id"])
+
+
+def test_add_document_rolls_back_chroma_chunks_when_sources_json_write_fails(monkeypatch):
+    """
+    Regression test cho fix atomic ingest: nếu save_sources() thất bại SAU KHI
+    upsert_chunks() đã thành công (vd hết dung lượng đĩa, lỗi quyền ghi file), chunks
+    vừa thêm PHẢI được rollback khỏi ChromaDB (không để lại orphan như sự cố thật đã
+    xảy ra với "world_energy_outlook_2018", 944 chunk mồ côi phát hiện và dọn thủ công),
+    và exception phải được raise rõ ràng, không nuốt lỗi im lặng.
+    """
+    content = b"1. Noi dung test rollback khi ghi sources.json that bai."
+    source_id = kb_manager._slugify("rollback_test")
+
+    def fake_embed_batch(batch, usage_accumulator=None):
+        if usage_accumulator is not None:
+            usage_accumulator.append(10 * len(batch))
+        return [[0.001] * 1536 for _ in batch]
+
+    def failing_save_sources(sources):
+        raise OSError("Giả lập lỗi ghi file (vd hết dung lượng đĩa)")
+
+    monkeypatch.setattr(kb_manager, "save_sources", failing_save_sources)
+
+    before_count = count_documents()
+    try:
+        with patch("rag.embeddings._embed_batch", side_effect=fake_embed_batch):
+            with pytest.raises(RuntimeError, match="rollback"):
+                kb_manager.add_document(content, "rollback_test.txt", "Rollback Test")
+
+        after_count = count_documents()
+        assert after_count == before_count, (
+            f"ChromaDB phải không còn chunk mồ côi nào sau rollback: "
+            f"before={before_count}, after={after_count}"
+        )
+
+        # source_id chưa bao giờ được ghi vào sources.json (fake save_sources luôn raise
+        # trước khi có cơ hội ghi) — isolate_kb fixture đã trỏ sang file tạm rỗng.
+        sources = kb_manager.load_sources()
+        assert all(s["id"] != source_id for s in sources)
+    finally:
+        # Safety net: nếu rollback trong add_document() có bug và không xóa hết, đảm bảo
+        # test này vẫn không để lại rác trong ChromaDB thật (storage/chroma/ không isolate,
+        # xem isolate_kb fixture ở trên).
+        get_collection().delete(where={"source_id": source_id})
 
 
 def test_list_sources_with_chunk_counts_matches_reality():
