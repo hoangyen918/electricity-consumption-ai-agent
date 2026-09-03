@@ -415,9 +415,14 @@ def render_trace_expander(trace_info: dict):
                 (_word_overlap_ratio(answer, c["text"]) for c in cited_chunks), default=0.0
             )
             st.caption(
-                f"Trích dẫn nguồn: **{'Có' if has_citation_marker else 'Không'}** · "
-                f"Khớp chunk retrieve: **{'Khớp' if matches_retrieved_source else 'Không khớp'}** · "
-                f"Độ liên quan từ vựng: **{overlap_ratio*100:.0f}%**"
+                f"Có dấu hiệu trích dẫn: **{'Có' if has_citation_marker else 'Không'}** · "
+                f"Tên nguồn xuất hiện trong answer: **{'Có' if matches_retrieved_source else 'Không'}** · "
+                f"Độ liên quan từ vựng: **{overlap_ratio*100:.0f}%** (heuristic)"
+            )
+            st.caption(
+                "_Đây là kiểm tra nhanh (heuristic), không phải xác nhận chính thức. "
+                "Đối chiếu chính xác (gold_evidence, cả nguồn lẫn trang) chỉ có trong "
+                "53 case ở tab Đánh giá hệ thống._"
             )
             if has_citation_marker and overlap_ratio < 0.15:
                 st.warning("⚠️ Answer trích nguồn nhưng ít từ trùng với nội dung chunk "
