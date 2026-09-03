@@ -295,15 +295,27 @@ def render_eval_dashboard():
 def _classify_answerability(answer: str) -> str:
     """
     Heuristic đơn giản, tái sử dụng REFUSAL_PATTERNS đã có trong evals/run_evals.py
-    (không viết lại logic từ chối mới). "Hỏi lại" chỉ là heuristic thô (answer kết
-    thúc bằng dấu hỏi) — không chính xác tuyệt đối, chỉ mang tính tham khảo nhanh.
+    (không viết lại logic từ chối mới).
     """
     answer_lower = answer.lower()
     if any(re.search(p, answer_lower) for p in REFUSAL_PATTERNS):
         return "Từ chối"
-    if answer.strip().endswith("?"):
-        return "Hỏi lại"
     return "Trả lời"
+
+
+def _word_overlap_ratio(answer: str, chunk_text: str) -> float:
+    """Tỷ lệ % từ có nghĩa (>=3 ký tự) trong chunk xuất hiện trong answer.
+    Heuristic thô — KHÔNG phải semantic similarity, chỉ đo lexical overlap.
+    Dùng để cảnh báo nhanh, không phải bằng chứng chính xác: answer diễn đạt
+    lại bằng từ khác vẫn có thể đúng nhưng overlap thấp."""
+    def _tokenize(s: str) -> set[str]:
+        return {w.lower() for w in re.findall(r"\w+", s) if len(w) >= 3}
+
+    chunk_words = _tokenize(chunk_text)
+    if not chunk_words:
+        return 0.0
+    answer_words = _tokenize(answer)
+    return len(chunk_words & answer_words) / len(chunk_words)
 
 
 def render_trace_expander(trace_info: dict):
@@ -312,6 +324,13 @@ def render_trace_expander(trace_info: dict):
         col1.metric("Số bước lặp", trace_info["iterations"])
         col2.metric("Thời gian", f"{trace_info['latency_ms']:.0f} ms")
         col3.metric("Chi phí ước tính", f"${trace_info['estimated_cost_usd']:.6f}")
+
+        # Tính SỚM (trước khi liệt kê chunk) để biết chunk nào thực sự được trích,
+        # dùng chung cho cả preview dài hơn (bên dưới) lẫn phần "Đánh giá câu trả lời".
+        answer = trace_info.get("answer", "")
+        has_citation_marker = any(
+            marker in answer for marker in ("Nguồn:", "trang", "p.")
+        )
 
         search_chunks = []
         if trace_info["trace"]:
@@ -325,7 +344,9 @@ def render_trace_expander(trace_info: dict):
                 elif t["tool_name"] == "search_knowledge_base":
                     for r in t["result"]["data"].get("results", []):
                         search_chunks.append(r)
-                        preview = r["text"][:100] + ("…" if len(r["text"]) > 100 else "")
+                        is_cited = has_citation_marker and r["source"].lower() in answer.lower()
+                        preview_len = 300 if is_cited else 100
+                        preview = r["text"][:preview_len] + ("…" if len(r["text"]) > preview_len else "")
                         line = f"📄 {r['source']} (trang {r['page']}) · distance {r['distance']} — \"{preview}\""
                         margin = SCORE_THRESHOLD - r["distance"]
                         if margin < MARGIN_WARNING_THRESHOLD:
@@ -341,7 +362,6 @@ def render_trace_expander(trace_info: dict):
             st.json(trace_info["usage_per_call"])
 
         # --- Phần 2: Đánh giá câu trả lời (live eval per-question) ---
-        answer = trace_info.get("answer", "")
         st.divider()
         st.write("**📝 Đánh giá câu trả lời:**")
 
@@ -349,16 +369,27 @@ def render_trace_expander(trace_info: dict):
         st.caption(f"Answerability: **{answerability}**")
 
         if search_chunks:
-            has_citation_marker = any(
-                marker in answer for marker in ("Nguồn:", "[", "trang", "p.")
-            )
             matches_retrieved_source = any(
                 c["source"].lower() in answer.lower() for c in search_chunks
             )
+            # Overlap từ vựng chỉ tính cho chunk THỰC SỰ được trích (has_citation_marker
+            # + tên nguồn khớp) — lấy MAX nếu có nhiều chunk được trích (1 chunk khớp tốt
+            # là đủ bằng chứng câu trả lời có bám nội dung gốc, không cần TB cả nhóm).
+            cited_chunks = [
+                c for c in search_chunks
+                if has_citation_marker and c["source"].lower() in answer.lower()
+            ]
+            overlap_ratio = max(
+                (_word_overlap_ratio(answer, c["text"]) for c in cited_chunks), default=0.0
+            )
             st.caption(
                 f"Trích dẫn nguồn: **{'Có' if has_citation_marker else 'Không'}** · "
-                f"Khớp chunk retrieve: **{'Khớp' if matches_retrieved_source else 'Không khớp'}**"
+                f"Khớp chunk retrieve: **{'Khớp' if matches_retrieved_source else 'Không khớp'}** · "
+                f"Độ liên quan từ vựng: **{overlap_ratio*100:.0f}%**"
             )
+            if has_citation_marker and overlap_ratio < 0.15:
+                st.warning("⚠️ Answer trích nguồn nhưng ít từ trùng với nội dung chunk "
+                           "— có thể agent diễn giải quá xa nội dung gốc, nên tự kiểm tra lại.")
 
 
 def render_chat():
