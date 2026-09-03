@@ -24,6 +24,7 @@
 - Hybrid BM25+RRF: thử nghiệm, reject vì 1 case tệ hơn (không đạt tiêu chí "không được tệ hơn")
 - Cross-encoder reranker: đã thử, không đạt hiệu quả — chi tiết số liệu đang được khôi phục lại
 - Threshold `SCORE_THRESHOLD=1.3`: đo thật, margin 0.41
+- Multi-dataset ambiguity (active dataset khi câu hỏi không nêu tên file): kiểm tra, KHÔNG sửa system prompt/logic active — agent tự gọi `get_dataset_summary()` trinh sát trước khi chọn dataset dù câu hỏi mơ hồ, `_validate_column()` chặn cứng ở tầng tool nếu chọn nhầm → worst case tốn thêm 1-2 vòng lặp, không trả lời sai âm thầm. Test n=1 (2 dataset khác schema, câu hỏi mơ hồ) khớp đúng ground truth 30084.29. Giới hạn: LLM không hoàn toàn deterministic, chưa đo tỷ lệ qua nhiều lần chạy — không cần vì worst case đã bị chặn ở tầng validate, không phải rủi ro sai kết quả.
 
 ## Tuần 2 (2026-08-28 → 2026-09-01)
 
