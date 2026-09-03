@@ -202,6 +202,54 @@ def test_add_document_rolls_back_chroma_chunks_when_sources_json_write_fails(mon
         get_collection().delete(where={"source_id": source_id})
 
 
+def test_list_sources_with_chunk_counts_surfaces_orphan_and_delete_works():
+    """
+    Regression test cho fix "orphan hiện trên UI": nếu 1 source_id tồn tại thật trong
+    ChromaDB nhưng KHÔNG có entry trong kb/sources.json (mô phỏng đúng sự cố thật
+    "world_energy_outlook_2018" — chunk đã upsert nhưng sources.json chưa kịp ghi),
+    list_sources_with_chunk_counts() PHẢI vẫn liệt kê được nó (is_orphan=True, title
+    fallback = source_id), và delete_document() PHẢI xóa thành công không exception.
+
+    Lưu ý: isolate_kb fixture (autouse) chỉ cô lập SOURCES_PATH, KHÔNG cô lập ChromaDB
+    thật (giới hạn đã biết, xem DATA_SOURCES.md) — nên trong ngữ cảnh test này,
+    sources.json giả rỗng khiến MỌI chunk thật khác (6000+ chunk của 17 nguồn thật)
+    cũng sẽ hiện ra như "orphan". Test này CHỈ kiểm tra đúng hành vi của orphan giả
+    lập, không giả định gì về các source khác.
+    """
+    from rag.vector_store import upsert_chunks, get_collection
+
+    orphan_source_id = "orphan_test_source"
+    fake_chunk = {
+        "chunk_id": f"{orphan_source_id}_p001_c00",
+        "source_id": orphan_source_id,
+        "source": "Orphan Test Source",
+        "page": 1,
+        "text": "Nội dung chunk mồ côi giả lập.",
+        "organization": "Test Org",
+        "document_type": "user_document",
+        "year_start": "",
+        "year_end": "",
+        "language": "",
+    }
+    upsert_chunks([fake_chunk], [[0.001] * 1536])
+
+    try:
+        listed = kb_manager.list_sources_with_chunk_counts()
+        orphan_entries = [s for s in listed if s["id"] == orphan_source_id]
+        assert len(orphan_entries) == 1
+        assert orphan_entries[0]["is_orphan"] is True
+        assert orphan_entries[0]["chunk_count"] == 1
+        assert orphan_entries[0]["title"] == orphan_source_id  # fallback dùng source_id thô
+
+        deleted_count = kb_manager.delete_document(orphan_source_id)
+        assert deleted_count == 1
+
+        after_delete = kb_manager.list_sources_with_chunk_counts()
+        assert all(s["id"] != orphan_source_id for s in after_delete)
+    finally:
+        get_collection().delete(where={"source_id": orphan_source_id})
+
+
 def test_list_sources_with_chunk_counts_matches_reality():
     content = b"1. Mot doan van ban du dai de tao it nhat mot chunk."
     result = kb_manager.add_document(content, "count_test.txt", "Count Test")

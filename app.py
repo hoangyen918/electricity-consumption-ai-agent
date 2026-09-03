@@ -155,7 +155,11 @@ def render_sidebar():
             sources = list_sources_with_chunk_counts()
             for src in sources:
                 col_a, col_b = st.columns([4, 1])
-                col_a.write(f"📄 {src['title']} ({src['chunk_count']} đoạn)")
+                icon = "⚠️ 📄" if src.get("is_orphan") else "📄"
+                label = f"{icon} {src['title']} ({src['chunk_count']} đoạn)"
+                if src.get("is_orphan"):
+                    label += " — thiếu metadata, nên xóa"
+                col_a.write(label)
                 if col_b.button("🗑️", key=f"del_{src['id']}"):
                     deleted = delete_document(src["id"])
                     st.success(f"Đã xóa {deleted} đoạn từ '{src['title']}'")

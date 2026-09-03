@@ -35,15 +35,44 @@ def save_sources(sources: list[dict]) -> None:
 
 
 def list_sources_with_chunk_counts() -> list[dict]:
-    """Danh sách nguồn kèm số chunk THẬT đang có trong Chroma (không lấy từ sources.json,
-    vì sources.json chỉ ghi metadata, số chunk thật phải hỏi Chroma để tránh lệch)."""
-    sources = load_sources()
+    """
+    Liệt kê MỌI source_id THẬT đang tồn tại trong ChromaDB (nguồn sự thật) — không chỉ
+    duyệt theo kb/sources.json như trước. Lý do: nếu add_document() thất bại giữa chừng
+    (chunks đã upsert vào Chroma nhưng sources.json chưa kịp ghi — xem sự cố thật
+    "world_energy_outlook_2018", 944 chunk mồ côi), nguồn đó vẫn PHẢI hiện trên UI để
+    người dùng biết và xóa được, thay vì "lạc trôi" vô hình.
+
+    Nguồn có entry trong sources.json -> dùng metadata đẹp (title, document_type...),
+    is_orphan=False. Nguồn KHÔNG có entry (mồ côi) -> title tạm dùng chính source_id,
+    các field metadata khác None, is_orphan=True để UI cảnh báo rõ ràng.
+    """
+    known_sources = load_sources()
+    known_ids = {s["id"] for s in known_sources}
+
     collection = get_collection()
+    all_metadatas = collection.get(include=["metadatas"])["metadatas"]
+    chunk_counts: dict[str, int] = {}
+    for meta in all_metadatas:
+        sid = meta.get("source_id", "")
+        chunk_counts[sid] = chunk_counts.get(sid, 0) + 1
+
     result = []
-    for src in sources:
-        matches = collection.get(where={"source_id": src["id"]})
-        chunk_count = len(matches["ids"]) if matches and matches.get("ids") else 0
-        result.append({**src, "chunk_count": chunk_count})
+    for src in known_sources:
+        result.append({**src, "chunk_count": chunk_counts.get(src["id"], 0), "is_orphan": False})
+
+    for source_id in sorted(set(chunk_counts) - known_ids):
+        result.append({
+            "id": source_id,
+            "title": source_id,
+            "filename": None,
+            "organization": None,
+            "document_type": None,
+            "year_start": None,
+            "year_end": None,
+            "language": None,
+            "chunk_count": chunk_counts[source_id],
+            "is_orphan": True,
+        })
     return result
 
 
