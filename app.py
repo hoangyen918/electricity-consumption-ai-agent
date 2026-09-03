@@ -61,6 +61,8 @@ def init_session_state():
     if "agent" not in st.session_state:
         st.session_state.agent = Agent(st.session_state.dataset_manager)
 
+    st.session_state.setdefault("session_total_cost_usd", 0.0)
+
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
 
@@ -89,11 +91,7 @@ def render_sidebar():
         st.header("⚡ Electricity Agent")
         st.caption(SETTINGS.app_title)
 
-        total_cost = sum(
-            msg["trace_info"]["estimated_cost_usd"]
-            for msg in st.session_state.get("chat_history", [])
-            if "trace_info" in msg
-        )
+        total_cost = st.session_state.session_total_cost_usd
         if total_cost > 0:
             st.metric("💰 Tổng chi phí câu hỏi (phiên này)", f"${total_cost:.6f}")
 
@@ -217,6 +215,7 @@ def render_sidebar():
         if st.button("🔄 Xóa lịch sử hội thoại"):
             st.session_state.agent.reset()
             st.session_state.chat_history = []
+            st.session_state.session_total_cost_usd = 0.0
             st.rerun()
 
         st.sidebar.divider()
@@ -457,6 +456,7 @@ def render_chat():
                 with st.spinner("Đang xử lý..."):
                     try:
                         result = st.session_state.agent.ask(question)
+                        st.session_state.session_total_cost_usd += result["estimated_cost_usd"]
                         st.write(result["answer"])
                         trace_info = {
                             "iterations": result["iterations"],

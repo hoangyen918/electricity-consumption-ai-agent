@@ -400,3 +400,12 @@ re-uploaded `WorldEnergyOutlook2021.pdf`, found only by comparing `count_documen
 the sum of `kb/sources.json`). Known, not fixed in this pass — proper isolation would require
 mocking `rag.vector_store.get_collection` or pointing it at a tmp_path-backed
 `PersistentClient` for the duration of these tests.
+
+### Known limitation — tests/test_agent.py flaky when run as part of the full suite
+
+`tests/test_agent.py` always passes 100% when run in isolation (`pytest tests/test_agent.py -v`)
+but has shown a nonzero fail rate when run inside the full 118-test suite (many real LLM API
+calls back-to-back) — observed repeatedly on 2026-09-02. Suspected cause: OpenRouter
+rate-limiting or network contention under sustained load; not yet investigated further. If a
+full-suite run fails specifically in this file, re-run it alone before concluding there is a
+real regression.
