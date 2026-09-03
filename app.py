@@ -196,6 +196,10 @@ def render_sidebar():
             st.session_state.chat_history = []
             st.rerun()
 
+        st.sidebar.divider()
+        if st.sidebar.button("📊 Xem đánh giá hệ thống"):
+            eval_dashboard_dialog()
+
 
 def render_eval_dashboard():
     """Phần 1 — trang tổng quan eval batch (53 case), đọc từ evals/baselines/v1_baseline.json
@@ -290,6 +294,11 @@ def render_eval_dashboard():
         "Chạy `python evals/run_evals.py` từ terminal để cập nhật số liệu trên "
         "(tốn ~$0.29, mất ~20-30 phút, gọi API thật)."
     )
+
+
+@st.dialog("📊 Đánh giá hệ thống", width="large")
+def eval_dashboard_dialog():
+    render_eval_dashboard()
 
 
 def _classify_answerability(answer: str) -> str:
@@ -402,7 +411,8 @@ def render_chat():
             if msg["role"] == "assistant" and "trace_info" in msg:
                 render_trace_expander(msg["trace_info"])
 
-    question = st.chat_input("Nhập câu hỏi của bạn...")
+    with st.bottom:
+        question = st.chat_input("Nhập câu hỏi của bạn...")
     if question:
         st.session_state.chat_history.append({"role": "user", "content": question})
         with st.chat_message("user"):
@@ -443,12 +453,7 @@ def render_chat():
 def main():
     init_session_state()
     render_sidebar()
-
-    tab_chat, tab_eval = st.tabs(["💬 Chat", "📊 Đánh giá hệ thống"])
-    with tab_chat:
-        render_chat()
-    with tab_eval:
-        render_eval_dashboard()
+    render_chat()
 
 
 if __name__ == "__main__":
