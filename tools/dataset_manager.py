@@ -1,9 +1,30 @@
+import csv
 from pathlib import Path
 
 import pandas as pd
 
 DATETIME_DERIVED_COLUMNS = ["year", "month", "day", "hour", "weekday", "date"]
 MIN_DATETIME_PARSE_RATE = 0.95
+CSV_DELIMITER_CANDIDATES = [",", ";", "\t", "|"]
+
+
+def _detect_delimiter(path: str) -> str:
+    """
+    Tự phát hiện delimiter thật của file CSV thay vì hardcode dấu phẩy — cần thiết
+    vì có dataset dùng dấu chấm phẩy (vd file wind turbine WindFarm04_WT*.csv, xuất
+    từ hệ thống châu Âu). Đọc dòng đầu (header) bằng encoding utf-8-sig (tự bỏ BOM
+    nếu có) rồi dùng csv.Sniffer() giới hạn trong CSV_DELIMITER_CANDIDATES.
+
+    Nếu Sniffer không nhận diện được (vd file chỉ có 1 cột, không có delimiter nào
+    xuất hiện), mặc định về "," để giữ nguyên hành vi cũ cho các dataset chỉ có 1 cột.
+    """
+    with open(path, "r", encoding="utf-8-sig", newline="") as f:
+        header_line = f.readline()
+    try:
+        dialect = csv.Sniffer().sniff(header_line, delimiters="".join(CSV_DELIMITER_CANDIDATES))
+        return dialect.delimiter
+    except csv.Error:
+        return ","
 
 
 def _parse_datetime_best_effort(series: pd.Series) -> tuple[pd.Series, float]:
@@ -116,7 +137,8 @@ class DatasetManager:
         return self.get_dataframe()
 
     def load_csv(self, path: str, name: str | None = None) -> None:
-        df = pd.read_csv(path)
+        delimiter = _detect_delimiter(path)
+        df = pd.read_csv(path, sep=delimiter, encoding="utf-8-sig")
         df, source_column = derive_time_columns(df)
         key = name or Path(path).name
         self._datasets[key] = df
@@ -194,6 +216,14 @@ class DatasetManager:
 
     def get_active_name(self) -> str | None:
         return self._active_name
+
+    def switch_dataset(self, name: str) -> bool:
+        """Đổi active sang dataset đã tồn tại trong dict, KHÔNG load lại file. Trả
+        False nếu tên không tồn tại (không raise), giữ active nguyên trạng."""
+        if name not in self._datasets:
+            return False
+        self._active_name = name
+        return True
 
     def remove_dataset(self, name: str) -> bool:
         """Xóa 1 dataset. Nếu xóa đúng active, tự chuyển active sang dataset còn lại

@@ -154,3 +154,59 @@ def test_remove_nonexistent_dataset_returns_false():
     m = DatasetManager()
     m.load_csv(SAMPLE_PATH, name="a.csv")
     assert m.remove_dataset("khong_ton_tai") is False
+
+
+def test_switch_dataset_changes_active_without_reloading():
+    m = DatasetManager()
+    m.load_csv(SAMPLE_PATH, name="a.csv")
+    m.load_csv(SAMPLE_PATH, name="b.csv")
+    assert m.get_active_name() == "b.csv"
+
+    assert m.switch_dataset("a.csv") is True
+    assert m.get_active_name() == "a.csv"
+    # switch khong load lai file - danh sach dataset khong doi
+    assert m.list_datasets() == ["a.csv", "b.csv"]
+
+
+def test_switch_dataset_nonexistent_returns_false_keeps_active():
+    m = DatasetManager()
+    m.load_csv(SAMPLE_PATH, name="a.csv")
+    assert m.switch_dataset("khong_ton_tai") is False
+    assert m.get_active_name() == "a.csv"
+
+
+def test_load_csv_auto_detects_semicolon_delimiter_with_bom(tmp_path):
+    """
+    Regression test cho bug phát hiện qua dataset wind turbine WindFarm04_WT*.csv:
+    file dùng dấu chấm phẩy làm delimiter + có BOM utf-8 ở đầu file (xuất từ hệ
+    thống châu Âu) - trước khi sửa, pd.read_csv() mặc định dấu phẩy khiến toàn bộ
+    dòng bị gộp thành 1 cột duy nhất, và BOM dính vào tên cột đầu tiên.
+    """
+    semicolon_csv = tmp_path / "semicolon_bom.csv"
+    content = "DATE_TIME;ACTIVE_POWER;WIND_SPEED\n01/01/2012 00:00;1174.61;9.21\n13/01/2012 00:10;1072.58;8.86\n"
+    semicolon_csv.write_bytes(b"\xef\xbb\xbf" + content.encode("utf-8"))
+
+    m = DatasetManager()
+    m.load_csv(str(semicolon_csv))
+
+    df = m.get_dataframe()
+    assert list(df.columns[:3]) == ["DATE_TIME", "ACTIVE_POWER", "WIND_SPEED"]
+    assert len(df) == 2
+    assert df.iloc[0]["ACTIVE_POWER"] == pytest.approx(1174.61)
+    # dòng thứ 2 co ngay > 12 -> phai duoc hieu la DD/MM/YYYY (dayfirst=True)
+    assert df.iloc[1]["day"] == 13
+    assert df.iloc[1]["month"] == 1
+
+
+def test_load_csv_still_uses_comma_delimiter_for_existing_datasets(tmp_path):
+    """Đảm bảo _detect_delimiter() không phá vỡ dataset dấu phẩy hiện có (vd Tetouan) -
+    delimiter tự phát hiện phải vẫn ra dấu phẩy như hành vi cũ."""
+    comma_csv = tmp_path / "comma_plain.csv"
+    comma_csv.write_text("colA,colB,colC\n1,2,3\n4,5,6\n", encoding="utf-8")
+
+    m = DatasetManager()
+    m.load_csv(str(comma_csv))
+
+    df = m.get_dataframe()
+    assert list(df.columns) == ["colA", "colB", "colC"]
+    assert len(df) == 2
