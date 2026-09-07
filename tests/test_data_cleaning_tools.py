@@ -6,6 +6,7 @@ from tools.data_cleaning_tools import (
     clean_missing_values,
     detect_duplicates,
     detect_statistical_anomalies,
+    correlation_analysis,
 )
 
 GT1_PATH_REAL = "data/wind_turbine/data1/his_data_GT1.csv"
@@ -156,3 +157,84 @@ def test_integration_cleaning_tools_run_on_real_gt1_dataset_without_crash():
     anomaly = detect_statistical_anomalies(m, column="GT1.Grid.totW", dataset_name="GT1", method="zscore", threshold=3.0)
     assert anomaly["ok"] is True
     assert 0 <= anomaly["data"]["anomaly_pct"] < 5
+
+
+def _correlation_fixture(tmp_path):
+    csv_path = tmp_path / "corr_sample.csv"
+    rows = ["ts,a,b_strong_pos,c_strong_neg,d_weak,label"]
+    for i in range(30):
+        a = float(i)
+        b = a * 2 + 1  # tuong quan duong hoan hao voi a
+        c = -a * 3 + 5  # tuong quan am hoan hao voi a
+        d = (i % 3) * 0.1  # gan nhu khong lien quan a
+        rows.append(f"2024-01-{(i%28)+1:02d},{a},{b},{c},{d},X")
+    csv_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    m = DatasetManager()
+    m.load_csv(str(csv_path))
+    return m
+
+
+def test_correlation_analysis_matches_manual_pandas_corr(tmp_path):
+    m = _correlation_fixture(tmp_path)
+    df = m.get_dataframe()
+    expected_b = df["a"].corr(df["b_strong_pos"])
+    expected_c = df["a"].corr(df["c_strong_neg"])
+
+    result = correlation_analysis(m, target_column="a", top_n=10)
+    assert result["ok"] is True
+    by_col = {c["column"]: c["correlation"] for c in result["data"]["correlations"]}
+    assert by_col["b_strong_pos"] == pytest.approx(round(expected_b, 4), abs=1e-4)
+    assert by_col["c_strong_neg"] == pytest.approx(round(expected_c, 4), abs=1e-4)
+
+
+def test_correlation_analysis_sorts_by_abs_value_but_keeps_sign(tmp_path):
+    m = _correlation_fixture(tmp_path)
+    result = correlation_analysis(m, target_column="a", top_n=10)
+    assert result["ok"] is True
+    correlations = result["data"]["correlations"]
+
+    # b_strong_pos (~+1.0) va c_strong_neg (~-1.0) phai dung dau va dung o dau (|corr| lon nhat)
+    top_cols = [c["column"] for c in correlations[:2]]
+    assert set(top_cols) == {"b_strong_pos", "c_strong_neg"}
+    b_entry = next(c for c in correlations if c["column"] == "b_strong_pos")
+    c_entry = next(c for c in correlations if c["column"] == "c_strong_neg")
+    assert b_entry["correlation"] > 0
+    assert c_entry["correlation"] < 0
+
+    # d_weak phai co |corr| nho hon han b_strong_pos/c_strong_neg (khong assert vi tri
+    # tuyet doi cuoi cung, vi dataset con co cac cot thoi gian tu derive_time_columns
+    # nhu 'weekday' co the |corr| con nho hon nua voi 'a' — day la hanh vi dung cua
+    # tool, khong phai bug)
+    d_entry = next(c for c in correlations if c["column"] == "d_weak")
+    assert abs(d_entry["correlation"]) < abs(b_entry["correlation"])
+    assert abs(d_entry["correlation"]) < abs(c_entry["correlation"])
+
+
+def test_correlation_analysis_top_n_limits_results(tmp_path):
+    m = _correlation_fixture(tmp_path)
+    df = m.get_dataframe()
+    expected_total = len(df.select_dtypes(include="number").columns) - 1  # tru chinh cot 'a'
+
+    result = correlation_analysis(m, target_column="a", top_n=1)
+    assert result["ok"] is True
+    assert len(result["data"]["correlations"]) == 1
+    assert result["data"]["total_columns_compared"] == expected_total
+
+
+def test_correlation_analysis_rejects_non_numeric_target(tmp_path):
+    m = _correlation_fixture(tmp_path)
+    result = correlation_analysis(m, target_column="label")
+    assert result["ok"] is False
+    assert "không phải kiểu số" in result["error"]
+
+
+def test_integration_correlation_analysis_on_real_gt1_values_in_valid_range():
+    m = DatasetManager()
+    m.load_csv(GT1_PATH_REAL, name="GT1")
+    result = correlation_analysis(m, target_column="GT1.Grid.totW", dataset_name="GT1", top_n=5)
+    assert result["ok"] is True
+    for c in result["data"]["correlations"]:
+        assert -1.0 <= c["correlation"] <= 1.0
+    # GT1.Common.TheoActiveW ly thuyet phai tuong quan rat manh voi Grid.totW thuc te
+    top_col_names = [c["column"] for c in result["data"]["correlations"]]
+    assert "GT1.Common.TheoActiveW" in top_col_names

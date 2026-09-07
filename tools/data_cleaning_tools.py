@@ -222,3 +222,50 @@ def detect_statistical_anomalies(
         })
     except Exception as exc:
         return failure(str(exc))
+
+
+def correlation_analysis(
+    manager: DatasetManager,
+    target_column: str,
+    dataset_name: str | None = None,
+    top_n: int = 10,
+) -> dict:
+    """
+    Correlation của target_column với TẤT CẢ cột số khác trong dataset (tự bỏ qua
+    cột non-numeric và chính target_column). Sắp xếp theo |correlation| giảm dần
+    nhưng GIỮ NGUYÊN dấu gốc trong output (không lấy trị tuyệt đối rồi mất dấu) —
+    dùng cho bất kỳ dataset nào, không riêng turbine gió.
+    """
+    try:
+        df = manager.get_dataframe(dataset_name)
+        if df is None:
+            return failure(_dataset_not_found(manager, dataset_name))
+
+        col_error = _validate_column(manager, target_column, dataset_name)
+        if col_error:
+            return failure(col_error)
+
+        if not pd.api.types.is_numeric_dtype(df[target_column]):
+            return failure(f"Column '{target_column}' không phải kiểu số, không thể tính correlation.")
+
+        numeric_cols = df.select_dtypes(include="number").columns.tolist()
+        other_numeric_cols = [c for c in numeric_cols if c != target_column]
+        if not other_numeric_cols:
+            return failure("Không có cột số nào khác để tính correlation.")
+
+        correlations = []
+        for col in other_numeric_cols:
+            corr = df[target_column].corr(df[col])
+            if pd.notna(corr):
+                correlations.append({"column": col, "correlation": round(float(corr), 4)})
+
+        correlations.sort(key=lambda x: abs(x["correlation"]), reverse=True)
+
+        return success({
+            "target_column": target_column,
+            "correlations": correlations[:top_n],
+            "total_columns_compared": len(other_numeric_cols),
+            "columns_returned": min(top_n, len(correlations)),
+        })
+    except Exception as exc:
+        return failure(str(exc))
