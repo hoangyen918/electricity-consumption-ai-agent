@@ -6,11 +6,12 @@ from pathlib import Path
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 from tools.dataset_manager import DatasetManager
 from tools.data_cleaning_tools import clean_missing_values, detect_duplicates
-from tools.turbine_diagnostic_tools import diagnose_theoretical_power_deviation
+from tools.turbine_diagnostic_tools import diagnose_theoretical_power_deviation, OPST_LABELS
 from agent.agent import Agent
 from config.settings import SETTINGS
 from rag.vector_store import count_documents
@@ -509,6 +510,28 @@ def _render_overview_tab():
         st.success("Không có cột nào bị missing trong dataset này.")
 
 
+def _render_categorical_comparison_chart(field_name: str, field_data: dict):
+    """Grouped bar chart (vi phạm vs bình thường) cho 1 field categorical
+    ({"violating_pct": {...}, "normal_pct": {...}}). Field 'GT1.Common.OpSt' map key số
+    sang nhãn chữ qua OPST_LABELS (nguồn tools/turbine_diagnostic_tools.py); field khác
+    (hour, month) giữ nguyên key số."""
+    violating_pct = field_data["violating_pct"]
+    normal_pct = field_data["normal_pct"]
+    all_keys = sorted(set(violating_pct.keys()) | set(normal_pct.keys()), key=lambda k: float(k))
+
+    if field_name == "GT1.Common.OpSt":
+        x_labels = [OPST_LABELS.get(int(float(k)), k) for k in all_keys]
+    else:
+        x_labels = all_keys
+
+    fig = go.Figure(data=[
+        go.Bar(name="Vi phạm", x=x_labels, y=[violating_pct.get(k, 0) for k in all_keys]),
+        go.Bar(name="Bình thường", x=x_labels, y=[normal_pct.get(k, 0) for k in all_keys]),
+    ])
+    fig.update_layout(barmode="group", yaxis_title="% trong nhóm", xaxis_title=field_name, title=field_name)
+    st.plotly_chart(fig, width="stretch")
+
+
 def _render_diagnostic_tab():
     st.subheader("🔍 Diagnostic — vấn đề đã phát hiện")
     finding = st.selectbox(
@@ -532,8 +555,22 @@ def _render_diagnostic_tab():
         col1.metric("Số dòng vi phạm (>10% lý thuyết)", f"{data['violation_count']:,}")
         col2.metric("Tỷ lệ", f"{data['violation_pct']:.2f}%")
 
-        st.write("**Bảng so sánh nhóm vi phạm vs bình thường:**")
-        st.json(data["comparison"])
+        st.write("**So sánh nhóm vi phạm vs bình thường:**")
+        numeric_rows = []
+        for field_name, field_data in data["comparison"].items():
+            if "violating_pct" in field_data:
+                _render_categorical_comparison_chart(field_name, field_data)
+            elif "violating" in field_data:
+                v, n = field_data["violating"], field_data["normal"]
+                numeric_rows.append({
+                    "Field": field_name,
+                    "Vi phạm (mean±std)": f"{v['mean']:.2f} ± {v['std']:.2f}",
+                    "Bình thường (mean±std)": f"{n['mean']:.2f} ± {n['std']:.2f}",
+                })
+
+        if numeric_rows:
+            st.write("**Bảng so sánh các field liên tục:**")
+            st.dataframe(pd.DataFrame(numeric_rows), width="stretch", hide_index=True)
 
         st.write("**Deviation% theo tercile WindSpd (đã đo trong investigation Phase 2, không tính lại):**")
         fig = px.bar(

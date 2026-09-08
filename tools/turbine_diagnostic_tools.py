@@ -26,6 +26,14 @@ NEGATIVE_POWER_RATED_FRACTION = 0.05
 ABSOLUTE_ZERO_SENTINEL_C = -273.0
 MAX_EXAMPLES = 3
 
+# Nhãn chính thức GT1.Common.OpSt — nguồn: data/wind_turbine/data1/note.txt (xác nhận
+# 2026-09-08, xem docs/turbine_data_audit.md mục "Phụ lục — GT1.Common.OpSt"). Đặt tập
+# trung ở đây để app.py (dashboard) và bất kỳ nơi nào khác dùng lại, không hardcode.
+OPST_LABELS = {
+    0: "Initialization", 1: "Stop", 2: "Standstill", 3: "Starting",
+    4: "Run up", 5: "Power Production", 6: "Service",
+}
+
 
 def _dataset_not_found(manager: DatasetManager, dataset_name: str) -> str:
     return (
