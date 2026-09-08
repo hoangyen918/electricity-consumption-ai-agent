@@ -12,8 +12,9 @@ def test_all_schemas_have_required_fields():
         assert schema["function"]["parameters"]["type"] == "object"
 
 
-def test_exactly_8_tools_defined():
-    assert len(ALL_TOOL_SCHEMAS) == 8
+def test_exactly_21_tools_defined():
+    """8 tool gốc (điện năng + KB) + 13 tool turbine gió (Phase 2-4, đăng ký ở Phase 5)."""
+    assert len(ALL_TOOL_SCHEMAS) == 21
 
 
 def test_tool_names_are_unique():

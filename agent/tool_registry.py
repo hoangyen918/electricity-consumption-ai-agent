@@ -13,6 +13,18 @@ from tools.dataframe_tools import (
     find_peak, compare_periods, calculate_correlation,
 )
 from tools.calculator_tools import calculate
+from tools.data_cleaning_tools import (
+    clean_missing_values, detect_duplicates, detect_statistical_anomalies, correlation_analysis,
+)
+from tools.turbine_diagnostic_tools import (
+    detect_physical_violations, detect_sensor_issues, diagnose_theoretical_power_deviation,
+    explain_anomaly,
+)
+from agent.turbine_tool_wrappers import (
+    TURBINE_DEFAULT_BIN_WIDTH,
+    estimate_power_curve_for_agent, classify_turbine_status_for_agent,
+    group_anomaly_windows_for_agent, detect_anomalies_ml_for_agent, predict_power_for_agent,
+)
 from rag.retriever import search_knowledge_base
 from tools.tool_results import failure
 
@@ -71,6 +83,102 @@ class SearchKnowledgeBaseArgs(BaseModel):
     top_k: int = 8
     language: Optional[str] = None
     document_type: Optional[str] = None
+
+
+# --- Nhóm generic (data_cleaning_tools.py) — dùng cho MỌI dataset, không riêng turbine ---
+
+class CleanMissingValuesArgs(BaseModel):
+    column: Optional[str] = None
+    strategy: Literal["report", "drop", "ffill", "interpolate"] = "report"
+    dataset_name: Optional[str] = None
+
+
+class DetectDuplicatesArgs(BaseModel):
+    subset_cols: Optional[list[str]] = None
+    dataset_name: Optional[str] = None
+
+
+class DetectStatisticalAnomaliesArgs(BaseModel):
+    column: str
+    method: Literal["zscore", "iqr"] = "zscore"
+    threshold: float = 3.0
+    dataset_name: Optional[str] = None
+
+
+class CorrelationAnalysisArgs(BaseModel):
+    target_column: str
+    top_n: int = 10
+    dataset_name: Optional[str] = None
+
+
+class ExplainAnomalyArgs(BaseModel):
+    anomaly_mask_column: Optional[str] = None
+    row_indices: Optional[list[int]] = None
+    compare_columns: Optional[list[str]] = None
+    dataset_name: Optional[str] = None
+
+
+# --- Nhóm turbine-specific (tools/turbine_diagnostic_tools.py) — tự nhận diện site,
+# chỉ áp dụng đúng cho dataset turbine gió (GT1.*/ACTIVE_POWER+WIND_SPEED) ---
+
+class DetectPhysicalViolationsArgs(BaseModel):
+    dataset_name: Optional[str] = None
+
+
+class DetectSensorIssuesArgs(BaseModel):
+    flatline_min_length: int = 6
+    gap_multiplier: float = 3.0
+    dataset_name: Optional[str] = None
+
+
+class DiagnoseTheoreticalPowerDeviationArgs(BaseModel):
+    threshold_pct: float = 10.0
+    dataset_name: Optional[str] = None
+
+
+class EstimatePowerCurveArgs(BaseModel):
+    power_column: Optional[str] = None
+    wind_speed_column: Optional[str] = None
+    bin_width: float = TURBINE_DEFAULT_BIN_WIDTH
+    dataset_name: Optional[str] = None
+
+
+class ClassifyTurbineStatusArgs(BaseModel):
+    power_column: Optional[str] = None
+    wind_speed_column: Optional[str] = None
+    setpoint_column: Optional[str] = None
+    bin_width: float = TURBINE_DEFAULT_BIN_WIDTH
+    dataset_name: Optional[str] = None
+
+
+class GroupAnomalyWindowsArgs(BaseModel):
+    timestamp_column: str = "datetime"
+    power_column: Optional[str] = None
+    wind_speed_column: Optional[str] = None
+    setpoint_column: Optional[str] = None
+    bin_width: float = TURBINE_DEFAULT_BIN_WIDTH
+    min_consecutive_points: int = 3
+    exclude_labels: Optional[list[str]] = None
+    dataset_name: Optional[str] = None
+
+
+class DetectAnomaliesMlArgs(BaseModel):
+    power_column: Optional[str] = None
+    wind_speed_column: Optional[str] = None
+    setpoint_column: Optional[str] = None
+    pitch_column: Optional[str] = None
+    wind_speed_std_column: Optional[str] = None
+    bin_width: float = TURBINE_DEFAULT_BIN_WIDTH
+    dataset_name: Optional[str] = None
+
+
+class PredictPowerArgs(BaseModel):
+    power_column: Optional[str] = None
+    wind_speed_column: Optional[str] = None
+    setpoint_column: Optional[str] = None
+    feature_columns: Optional[list[str]] = None
+    bin_width: float = TURBINE_DEFAULT_BIN_WIDTH
+    dataset_name: Optional[str] = None
 
 
 def execute_tool(tool_name: str, arguments: dict, dataset_manager: DatasetManager) -> dict:
@@ -152,6 +260,89 @@ def execute_tool(tool_name: str, arguments: dict, dataset_manager: DatasetManage
                 document_type=args.document_type,
             )
 
+        elif tool_name == "clean_missing_values":
+            args = CleanMissingValuesArgs(**arguments)
+            return clean_missing_values(
+                dataset_manager, dataset_name=args.dataset_name, column=args.column, strategy=args.strategy,
+            )
+
+        elif tool_name == "detect_duplicates":
+            args = DetectDuplicatesArgs(**arguments)
+            return detect_duplicates(dataset_manager, dataset_name=args.dataset_name, subset_cols=args.subset_cols)
+
+        elif tool_name == "detect_statistical_anomalies":
+            args = DetectStatisticalAnomaliesArgs(**arguments)
+            return detect_statistical_anomalies(
+                dataset_manager, column=args.column, dataset_name=args.dataset_name,
+                method=args.method, threshold=args.threshold,
+            )
+
+        elif tool_name == "correlation_analysis":
+            args = CorrelationAnalysisArgs(**arguments)
+            return correlation_analysis(
+                dataset_manager, target_column=args.target_column, dataset_name=args.dataset_name, top_n=args.top_n,
+            )
+
+        elif tool_name == "explain_anomaly":
+            args = ExplainAnomalyArgs(**arguments)
+            return explain_anomaly(
+                dataset_manager, dataset_name=args.dataset_name,
+                anomaly_mask_column=args.anomaly_mask_column, row_indices=args.row_indices,
+                compare_columns=args.compare_columns,
+            )
+
+        elif tool_name == "detect_physical_violations":
+            args = DetectPhysicalViolationsArgs(**arguments)
+            return detect_physical_violations(dataset_manager, dataset_name=args.dataset_name)
+
+        elif tool_name == "detect_sensor_issues":
+            args = DetectSensorIssuesArgs(**arguments)
+            return detect_sensor_issues(
+                dataset_manager, dataset_name=args.dataset_name,
+                flatline_min_length=args.flatline_min_length, gap_multiplier=args.gap_multiplier,
+            )
+
+        elif tool_name == "diagnose_theoretical_power_deviation":
+            args = DiagnoseTheoreticalPowerDeviationArgs(**arguments)
+            return diagnose_theoretical_power_deviation(
+                dataset_manager, dataset_name=args.dataset_name, threshold_pct=args.threshold_pct,
+            )
+
+        elif tool_name == "estimate_power_curve":
+            args = EstimatePowerCurveArgs(**arguments)
+            return estimate_power_curve_for_agent(
+                dataset_manager, args.dataset_name, args.power_column, args.wind_speed_column, args.bin_width,
+            )
+
+        elif tool_name == "classify_turbine_status":
+            args = ClassifyTurbineStatusArgs(**arguments)
+            return classify_turbine_status_for_agent(
+                dataset_manager, args.dataset_name, args.power_column, args.wind_speed_column,
+                args.setpoint_column, args.bin_width,
+            )
+
+        elif tool_name == "group_anomaly_windows":
+            args = GroupAnomalyWindowsArgs(**arguments)
+            return group_anomaly_windows_for_agent(
+                dataset_manager, args.dataset_name, args.timestamp_column, args.power_column,
+                args.wind_speed_column, args.setpoint_column, args.bin_width,
+                args.min_consecutive_points, args.exclude_labels,
+            )
+
+        elif tool_name == "detect_anomalies_ml":
+            args = DetectAnomaliesMlArgs(**arguments)
+            return detect_anomalies_ml_for_agent(
+                dataset_manager, args.dataset_name, args.power_column, args.wind_speed_column,
+                args.setpoint_column, args.pitch_column, args.wind_speed_std_column, args.bin_width,
+            )
+
+        elif tool_name == "predict_power":
+            args = PredictPowerArgs(**arguments)
+            return predict_power_for_agent(
+                dataset_manager, args.dataset_name, args.power_column, args.wind_speed_column,
+                args.setpoint_column, args.feature_columns, args.bin_width,
+            )
+
         else:
             return failure(f"Unknown tool: '{tool_name}'")
 
@@ -164,4 +355,9 @@ def execute_tool(tool_name: str, arguments: dict, dataset_manager: DatasetManage
 TOOL_NAMES = [
     "get_dataset_summary", "aggregate_metric", "group_metric", "find_peak",
     "compare_periods", "calculate_correlation", "calculate", "search_knowledge_base",
+    "clean_missing_values", "detect_duplicates", "detect_statistical_anomalies",
+    "correlation_analysis", "explain_anomaly",
+    "detect_physical_violations", "detect_sensor_issues", "diagnose_theoretical_power_deviation",
+    "estimate_power_curve", "classify_turbine_status", "group_anomaly_windows",
+    "detect_anomalies_ml", "predict_power",
 ]
