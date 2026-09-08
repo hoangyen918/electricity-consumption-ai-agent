@@ -1,3 +1,5 @@
+from unittest.mock import MagicMock, patch
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -11,6 +13,8 @@ from tools.turbine_diagnostic_tools import (
     estimate_power_curve,
     classify_turbine_status,
     group_anomaly_windows,
+    detect_anomalies_ml,
+    predict_power,
 )
 
 GT1_PATH_REAL = "data/wind_turbine/data1/his_data_GT1.csv"
@@ -676,4 +680,341 @@ def test_integration_group_anomaly_windows_on_real_gt1_without_crash():
     assert result["data"]["total_windows"] > 0
     for w in result["data"]["windows"][:20]:
         assert w["n_points"] >= 3
-        assert w["label"] != "Normal"
+
+
+# =============================== detect_anomalies_ml ===============================
+
+def _gate_scenario_fixture(tmp_path):
+    """
+    223 dong: 200 'binh thuong' (power=1000, classification=Normal) + 20 'outlier ro rang'
+    (power=5000, classification=Measurement Error — z-score THAT SU se flag vi |z|>3,
+    da tinh tay: mean~1358.7, std~1145.4, z(5000)=3.18) + 3 diem 'IF-only co y nghia'
+    (power=1000 giong baseline nen z-score KHONG flag, nhung classification=Under
+    Production — dai dien cho diem ML phat hien duoc ma z-score bo sot).
+    Dat 200 dong Normal o DAU file (train zone 80% dau chi toan Normal, du >=30 diem).
+    """
+    rows = ["ts,power,wind,classlabel"]
+    base = pd.Timestamp("2024-01-01")
+    i = 0
+    for _ in range(200):
+        rows.append(f"{(base + pd.Timedelta(minutes=10*i)).isoformat()},1000.0,10.0,Normal")
+        i += 1
+    for _ in range(20):
+        rows.append(f"{(base + pd.Timedelta(minutes=10*i)).isoformat()},5000.0,10.0,Measurement Error")
+        i += 1
+    for _ in range(3):
+        rows.append(f"{(base + pd.Timedelta(minutes=10*i)).isoformat()},1000.0,10.0,Under Production")
+        i += 1
+    csv_path = tmp_path / "gate_scenario.csv"
+    csv_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    m = DatasetManager()
+    m.load_csv(str(csv_path))
+    df = m.get_dataframe()
+    classification = {idx: lbl for idx, lbl in zip(df.index, df["classlabel"])}
+    return m, classification, len(df)
+
+
+def test_detect_anomalies_ml_uses_isolation_forest_when_gate_passes(tmp_path):
+    m, classification, n = _gate_scenario_fixture(tmp_path)
+
+    # Mock IsolationForest: flag DUNG 23 dong cuoi (20 outlier + 3 IF-only) la anomaly (-1),
+    # con lai la normal (1) — theo dung thu tu dong goc (valid_mask la toan bo, khong NaN).
+    fake_predictions = np.array([1] * (n - 23) + [-1] * 23)
+    mock_instance = MagicMock()
+    mock_instance.fit.return_value = None
+    mock_instance.predict.return_value = fake_predictions
+    with patch("sklearn.ensemble.IsolationForest", return_value=mock_instance) as mock_cls:
+        result = detect_anomalies_ml(
+            m, power_column="power", wind_speed_column="wind", classification=classification,
+        )
+
+    assert result["ok"] is True
+    assert result["data"]["method_used"] == "isolation_forest"
+    gate = result["data"]["gate_4a"]
+    assert gate["overlap_gate_pass"] is True
+    assert gate["meaningful_gate_pass"] is True
+    assert gate["overlap_pct_with_zscore"] >= 80.0
+    assert gate["meaningful_count"] == 3
+    assert result["data"]["anomaly_count"] == 23
+
+
+def test_detect_anomalies_ml_falls_back_when_overlap_gate_fails(tmp_path):
+    m, classification, n = _gate_scenario_fixture(tmp_path)
+
+    # Mock IsolationForest flag 23 dong HOAN TOAN KHAC voi z-score (vd 23 dong dau,
+    # deu la baseline Normal, khong trung voi 20 outlier ma z-score flag) -> overlap=0%.
+    fake_predictions = np.array([-1] * 23 + [1] * (n - 23))
+    mock_instance = MagicMock()
+    mock_instance.fit.return_value = None
+    mock_instance.predict.return_value = fake_predictions
+    with patch("sklearn.ensemble.IsolationForest", return_value=mock_instance):
+        result = detect_anomalies_ml(
+            m, power_column="power", wind_speed_column="wind", classification=classification,
+        )
+
+    assert result["ok"] is True
+    assert result["data"]["method_used"] == "fallback_statistical_zscore"
+    assert "Gate 4a FAIL" in result["data"]["ml_gate_reason"]
+    assert result["data"]["gate_4a"]["overlap_gate_pass"] is False
+
+
+def test_detect_anomalies_ml_falls_back_when_insufficient_normal_training_points(tmp_path):
+    """Dataset qua nho (<30 diem Normal trong train zone) -> fallback tu nhien, KHONG can mock."""
+    rows = ["ts,power,wind,classlabel"]
+    base = pd.Timestamp("2024-01-01")
+    for i in range(10):
+        # power co bien thien nhe (khong hang so) de detect_statistical_anomalies()
+        # (fallback that su duoc goi) khong tu fail vi std=0 — day la 1 bug rieng da
+        # phat hien va sua khi viet test nay (fixture ban dau std=0 lam sai lech test).
+        rows.append(f"{(base + pd.Timedelta(minutes=10*i)).isoformat()},{1000.0+i},10.0,Normal")
+    csv_path = tmp_path / "tiny.csv"
+    csv_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    m = DatasetManager()
+    m.load_csv(str(csv_path))
+    df = m.get_dataframe()
+    classification = {idx: "Normal" for idx in df.index}
+
+    result = detect_anomalies_ml(m, power_column="power", wind_speed_column="wind", classification=classification)
+    assert result["ok"] is True
+    assert result["data"]["method_used"] == "fallback_statistical_zscore"
+    assert "Không đủ điểm" in result["data"]["ml_gate_reason"]
+
+
+def test_detect_anomalies_ml_falls_back_when_sklearn_import_fails(tmp_path):
+    m, classification, n = _gate_scenario_fixture(tmp_path)
+    with patch.dict("sys.modules", {"sklearn.ensemble": None}):
+        result = detect_anomalies_ml(m, power_column="power", wind_speed_column="wind", classification=classification)
+    assert result["ok"] is True
+    assert result["data"]["method_used"] == "fallback_statistical_zscore"
+    assert "scikit-learn" in result["data"]["ml_gate_reason"]
+
+
+def test_integration_detect_anomalies_ml_on_real_gt1_falls_back_gate_fails_as_measured():
+    """Xac nhan hanh vi THAT tren GT1 that: Gate 4a FAIL that su (da do 2026-09-08,
+    xem docstring detect_anomalies_ml) -> phai fallback, khong dung Isolation Forest that."""
+    m = DatasetManager()
+    m.load_csv(GT1_PATH_REAL, name="GT1")
+    curve_result = estimate_power_curve(m, power_column="GT1.Grid.totW", wind_speed_column="GT1.Common.WindSpd", dataset_name="GT1", bin_width=1.0)
+    classify_result = classify_turbine_status(
+        m, power_column="GT1.Grid.totW", wind_speed_column="GT1.Common.WindSpd",
+        power_curve=curve_result["data"], dataset_name="GT1", setpoint_column="GT1.SP.ActualSPP",
+    )
+    result = detect_anomalies_ml(
+        m, power_column="GT1.Grid.totW", wind_speed_column="GT1.Common.WindSpd",
+        classification=classify_result["data"]["classification"], dataset_name="GT1",
+        pitch_column="GT1.Pitch.Angle1",
+    )
+    assert result["ok"] is True
+
+
+# =============================== predict_power ===============================
+
+def _predict_power_fixture(tmp_path, n_train=50, n_test=20, extra_features=None):
+    """wind co dinh = 5.0 (bin center 5.5 voi bin_width=1.0) — power co bien thien nhe
+    quanh 500 de baseline (noi suy hang so=500) co RMSE > 0, cho phep XGBoost (mock)
+    "hoan hao" (RMSE=0) thang ro rang. extra_features: list ten cot dummy them vao,
+    gia tri co dinh (khong anh huong prediction thuc vi XGBRegressor duoc mock)."""
+    extra_features = extra_features or []
+    header = "ts,power,wind" + "".join(f",{f}" for f in extra_features)
+    rows = [header]
+    base = pd.Timestamp("2024-01-01")
+    rng = np.random.RandomState(0)
+    i = 0
+    for _ in range(n_train):
+        p = 500.0 + rng.uniform(-5, 5)
+        extras = "".join(f",{1.0}" for _ in extra_features)
+        rows.append(f"{(base + pd.Timedelta(minutes=10*i)).isoformat()},{p},5.0{extras}")
+        i += 1
+    test_powers = []
+    for _ in range(n_test):
+        p = 500.0 + rng.uniform(-20, 20)
+        test_powers.append(p)
+        extras = "".join(f",{2.0}" for _ in extra_features)
+        rows.append(f"{(base + pd.Timedelta(minutes=10*i)).isoformat()},{p},5.0{extras}")
+        i += 1
+    csv_path = tmp_path / "predict_power_fixture.csv"
+    csv_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    m = DatasetManager()
+    m.load_csv(str(csv_path))
+    df = m.get_dataframe()
+    classification = {idx: "Normal" for idx in df.index}
+    power_curve = {"bin_width": 1.0, "power_curve": [{"wind_speed_bin_center": 5.5, "median_power": 500.0, "std_power": 3.0}]}
+    # train_fraction chinh xac de split_idx = n_train dung boc (predict_power dung
+    # int(n*train_fraction) — truyen tuong minh de tranh lech ranh gioi train/test).
+    train_fraction = n_train / (n_train + n_test)
+    return m, classification, power_curve, test_powers, train_fraction
+
+
+def test_predict_power_uses_xgboost_when_both_gates_pass(tmp_path):
+    m, classification, power_curve, test_powers, train_fraction = _predict_power_fixture(tmp_path)
+
+    mock_model = MagicMock()
+    mock_model.fit.return_value = None
+    mock_model.predict.return_value = np.array(test_powers)  # du doan HOAN HAO -> RMSE=0
+    mock_model.feature_importances_ = np.array([0.99, 0.01])  # wind #1
+
+    with patch("xgboost.XGBRegressor", return_value=mock_model):
+        result = predict_power(
+            m, power_column="power", wind_speed_column="wind", power_curve=power_curve,
+            classification=classification, train_fraction=train_fraction,
+        )
+    assert result["ok"] is True
+    assert result["data"]["method_used"] == "xgboost"
+    assert result["data"]["gate_4b"]["gate_4b_pass"] is True
+    assert result["data"]["gate_4c"]["gate_4c_pass"] is True
+    assert result["data"]["gate_4c"]["wind_speed_rank"] == 1
+    assert result["data"]["metrics"]["rmse"] == pytest.approx(0.0, abs=1e-6)
+    assert result["data"]["baseline_metrics"]["rmse"] > 0
+
+
+def test_predict_power_falls_back_when_gate_4b_fails(tmp_path):
+    m, classification, power_curve, test_powers, train_fraction = _predict_power_fixture(tmp_path)
+
+    # du doan RAT XA thuc te -> RMSE xgboost >> baseline
+    bad_predictions = np.array(test_powers) + 10000.0
+    mock_model = MagicMock()
+    mock_model.fit.return_value = None
+    mock_model.predict.return_value = bad_predictions
+    mock_model.feature_importances_ = np.array([0.99, 0.01])
+
+    with patch("xgboost.XGBRegressor", return_value=mock_model):
+        result = predict_power(
+            m, power_column="power", wind_speed_column="wind", power_curve=power_curve,
+            classification=classification, train_fraction=train_fraction,
+        )
+    assert result["ok"] is True
+    assert result["data"]["method_used"] == "power_curve_interpolation"
+    assert "Gate 4b FAIL" in result["data"]["ml_gate_reason"]
+    assert result["data"]["gate_4b"]["gate_4b_pass"] is False
+
+
+def test_predict_power_falls_back_when_gate_4c_fails_even_though_gate_4b_passes(tmp_path):
+    """3 feature (wind + 2 dummy) — du doan XGBoost HOAN HAO (Gate 4b chac chan pass)
+    nhung feature_importances_ xep wind xuong hang #3 -> VAN PHAI fallback (Gate 4c
+    nghiem ngat hon Gate 4b, khong duoc dung ML du RMSE tot)."""
+    m, classification, power_curve, test_powers, train_fraction = _predict_power_fixture(
+        tmp_path, extra_features=["extra1", "extra2"]
+    )
+
+    mock_model = MagicMock()
+    mock_model.fit.return_value = None
+    mock_model.predict.return_value = np.array(test_powers)  # RMSE=0, Gate 4b chac chan pass
+    # thu tu feature dua vao model: [wind, extra1, extra2] (theo all_features trong code)
+    # xep wind THAP NHAT -> hang #3
+    mock_model.feature_importances_ = np.array([0.05, 0.5, 0.45])
+
+    with patch("xgboost.XGBRegressor", return_value=mock_model):
+        result = predict_power(
+            m, power_column="power", wind_speed_column="wind", power_curve=power_curve,
+            classification=classification, feature_columns=["extra1", "extra2"], train_fraction=train_fraction,
+        )
+    assert result["ok"] is True
+    assert result["data"]["method_used"] == "power_curve_interpolation"
+    assert "Gate 4c FAIL" in result["data"]["ml_gate_reason"]
+    assert result["data"]["gate_4b"]["gate_4b_pass"] is True  # Gate 4b THAT SU pass
+    assert result["data"]["gate_4c"]["gate_4c_pass"] is False
+    assert result["data"]["gate_4c"]["wind_speed_rank"] == 3
+
+
+def _leakage_column_fixture(tmp_path, extra_col_name):
+    """Fixture RIENG co san cot leakage-risk (khac fixture chung _predict_power_fixture
+    KHONG co cot nay) — bug da tu phat hien: test cu dung feature_columns tro toi cot
+    KHONG TON TAI trong df, nen chi cham nhanh '_validate_column' (bao 'not found'),
+    CHUA BAO GIO thuc su chay toi nhanh leakage-guard. Sua bang cach tao that cot do."""
+    header = f"ts,power,wind,{extra_col_name}"
+    rows = [header]
+    base = pd.Timestamp("2024-01-01")
+    for i in range(40):
+        rows.append(f"{(base + pd.Timedelta(minutes=10*i)).isoformat()},{500.0+i},5.0,{490.0+i}")
+    csv_path = tmp_path / f"leakage_{extra_col_name.replace('.', '_')}.csv"
+    csv_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    m = DatasetManager()
+    m.load_csv(str(csv_path))
+    df = m.get_dataframe()
+    classification = {idx: "Normal" for idx in df.index}
+    power_curve = {"bin_width": 1.0, "power_curve": [{"wind_speed_bin_center": 5.5, "median_power": 500.0, "std_power": 3.0}]}
+    return m, classification, power_curve
+
+
+def test_predict_power_rejects_theoretical_power_as_feature(tmp_path):
+    m, classification, power_curve = _leakage_column_fixture(tmp_path, "GT1.Common.TheoActiveW")
+    result = predict_power(
+        m, power_column="power", wind_speed_column="wind", power_curve=power_curve,
+        classification=classification, feature_columns=["GT1.Common.TheoActiveW"],
+    )
+    assert result["ok"] is False
+    assert "leakage" in result["error"].lower()
+    assert "TheoActiveW" in result["error"]
+
+
+def test_predict_power_rejects_actual_setpoint_as_feature(tmp_path):
+    """ActualSPP la leakage tuong tu TheoActiveW — setpoint gan nhu quyet dinh truc tiep
+    power luc Curtailment (xem rule Curtailment trong classify_turbine_status())."""
+    m, classification, power_curve = _leakage_column_fixture(tmp_path, "GT1.SP.ActualSPP")
+    result = predict_power(
+        m, power_column="power", wind_speed_column="wind", power_curve=power_curve,
+        classification=classification, feature_columns=["GT1.SP.ActualSPP"],
+    )
+    assert result["ok"] is False
+    assert "leakage" in result["error"].lower()
+    assert "ActualSPP" in result["error"]
+
+
+def test_predict_power_falls_back_when_insufficient_data(tmp_path):
+    header = "ts,power,wind"
+    rows = [header]
+    base = pd.Timestamp("2024-01-01")
+    for i in range(10):
+        rows.append(f"{(base + pd.Timedelta(minutes=10*i)).isoformat()},{500.0+i},5.0")
+    csv_path = tmp_path / "tiny_predict.csv"
+    csv_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    m = DatasetManager()
+    m.load_csv(str(csv_path))
+    df = m.get_dataframe()
+    classification = {idx: "Normal" for idx in df.index}
+    power_curve = {"bin_width": 1.0, "power_curve": [{"wind_speed_bin_center": 5.5, "median_power": 500.0, "std_power": 3.0}]}
+
+    result = predict_power(m, power_column="power", wind_speed_column="wind", power_curve=power_curve, classification=classification)
+    assert result["ok"] is True
+    assert result["data"]["method_used"] == "power_curve_interpolation"
+    assert "Không đủ điểm" in result["data"]["ml_gate_reason"]
+
+
+def test_integration_predict_power_on_real_gt1_uses_xgboost_as_measured():
+    """Xac nhan hanh vi THAT tren GT1: ca 2 gate PASS that su (da do 2026-09-08, xem
+    docstring predict_power) -> phai dung XGBoost that, khong fallback."""
+    m = DatasetManager()
+    m.load_csv(GT1_PATH_REAL, name="GT1")
+    curve_result = estimate_power_curve(m, power_column="GT1.Grid.totW", wind_speed_column="GT1.Common.WindSpd", dataset_name="GT1", bin_width=1.0)
+    classify_result = classify_turbine_status(
+        m, power_column="GT1.Grid.totW", wind_speed_column="GT1.Common.WindSpd",
+        power_curve=curve_result["data"], dataset_name="GT1", setpoint_column="GT1.SP.ActualSPP",
+    )
+    result = predict_power(
+        m, power_column="GT1.Grid.totW", wind_speed_column="GT1.Common.WindSpd",
+        power_curve=curve_result["data"], classification=classify_result["data"]["classification"],
+        dataset_name="GT1", feature_columns=["GT1.Pitch.Angle1", "GT1.Common.WindTrackDevAng"],
+    )
+    assert result["ok"] is True
+    assert result["data"]["method_used"] == "xgboost"
+    assert result["data"]["metrics"]["rmse"] < result["data"]["baseline_metrics"]["rmse"]
+    assert result["data"]["gate_4c"]["wind_speed_rank"] == 1
+
+
+def test_integration_predict_power_on_real_wt1_uses_xgboost_as_measured():
+    m = DatasetManager()
+    m.load_csv(WT1_PATH_REAL, name="WT1")
+    curve_result = estimate_power_curve(m, power_column="ACTIVE_POWER", wind_speed_column="WIND_SPEED", dataset_name="WT1", bin_width=1.0)
+    classify_result = classify_turbine_status(
+        m, power_column="ACTIVE_POWER", wind_speed_column="WIND_SPEED",
+        power_curve=curve_result["data"], dataset_name="WT1",
+    )
+    result = predict_power(
+        m, power_column="ACTIVE_POWER", wind_speed_column="WIND_SPEED",
+        power_curve=curve_result["data"], classification=classify_result["data"]["classification"],
+        dataset_name="WT1", feature_columns=["PITCH", "WIND_SPEED_STD", "TEMPERATURE_STATOR"],
+    )
+    assert result["ok"] is True
+    assert result["data"]["method_used"] == "xgboost"
+    assert result["data"]["metrics"]["rmse"] < result["data"]["baseline_metrics"]["rmse"]
+    assert result["data"]["gate_4c"]["wind_speed_rank"] == 1

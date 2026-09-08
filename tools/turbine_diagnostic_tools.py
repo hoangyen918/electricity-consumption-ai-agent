@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 
 from tools.dataset_manager import DatasetManager
+from tools.data_cleaning_tools import detect_statistical_anomalies
 from tools.tool_results import failure, success
 
 CUT_IN_SPEED_MS = 3.0
@@ -896,6 +897,365 @@ def group_anomaly_windows(
             "total_windows": len(windows),
             "min_consecutive_points": min_consecutive_points,
             "exclude_labels": exclude_labels,
+        })
+    except Exception as exc:
+        return failure(str(exc))
+
+
+GATE_4A_MIN_OVERLAP_PCT = 80.0
+GATE_4A_MEANINGFUL_SAMPLE_SIZE = 10
+GATE_4A_MIN_MEANINGFUL_COUNT = 3
+
+
+def detect_anomalies_ml(
+    manager: DatasetManager,
+    power_column: str,
+    wind_speed_column: str,
+    classification: dict,
+    dataset_name: str | None = None,
+    pitch_column: str | None = None,
+    wind_speed_std_column: str | None = None,
+    train_fraction: float = 0.8,
+    z_score_threshold: float = 3.0,
+    random_state: int = 42,
+) -> dict:
+    """
+    Isolation Forest phát hiện bất thường, CHỈ dùng nếu vượt Gate 4a — so với
+    detect_statistical_anomalies() (z-score, Phase 2) trên CÙNG dataset. Nếu KHÔNG
+    vượt gate, tự động fallback về detect_statistical_anomalies() nguyên bản (rule-based)
+    — người gọi tool KHÔNG cần biết đằng sau dùng ML hay rule-based.
+
+    ĐÃ VALIDATE THẬT (2026-09-08) trên cả 2 site GT1/WT1 — KẾT QUẢ: **Gate 4a FAIL cả
+    2 site**, mặc dù kiểm tra ý nghĩa vật lý riêng lẻ PASS (7/10 và 5/10 điểm IF-flag-
+    riêng có classification != Normal). Chi tiết:
+    - GT1: overlap=0.00% (z-score threshold=3.0 trên GT1.Grid.totW flag ĐÚNG 0 điểm
+      trong toàn bộ 233.953 dòng — không phải bug, do std cột này (~1530) quá lớn so
+      với range thực tế (-44.5 → 4525.2), nên |z|>3 không bao giờ xảy ra — baseline
+      z-score bị suy biến cho chính cột/ngưỡng này, không phải IF kém).
+    - WT1: overlap=5.38% (5.150/95.788 điểm IF-flag trùng z-score) — xa dưới 80%.
+    Hàm này VẪN implement ĐẦY ĐỦ logic Isolation Forest + gate-check THẬT (không
+    hardcode nhánh fallback) để tổng quát cho dataset khác có thể vượt gate trong
+    tương lai — nhưng trên GT1/WT1 hiện tại, kết quả THỰC TẾ khi gọi hàm này sẽ LUÔN
+    là fallback, vì gate thất bại thật, không phải giả lập.
+
+    classification: dict {row_index: label} từ classify_turbine_status() (TÁI DÙNG,
+    không tính lại) — dùng để (a) lọc tập "Normal" làm train set, (b) ước lượng
+    contamination = % không-Normal trong CHÍNH dataset (không hardcode 0.1 mặc định
+    sklearn), (c) kiểm tra ý nghĩa vật lý của điểm IF-flag-riêng (Gate 4a phần 2).
+
+    sklearn được import LAZY bên trong hàm (không import ở đầu module) — tránh rủi ro
+    đã gặp thật khi phát triển: scikit-learn transitively cần scipy.sparse.csgraph,
+    1 số bản build scipy bị Windows Application Control policy chặn DLL (đã pin
+    scipy==1.11.4 trong requirements.txt để tránh, nhưng vẫn phòng hờ import lazy để
+    lỗi sklearn không làm sập TOÀN BỘ module turbine_diagnostic_tools.py).
+    """
+    try:
+        df = manager.get_dataframe(dataset_name)
+        if df is None:
+            return failure(_dataset_not_found(manager, dataset_name))
+
+        for col in (power_column, wind_speed_column):
+            col_error = _validate_column(manager, col, dataset_name)
+            if col_error:
+                return failure(col_error)
+
+        def _fallback(reason: str) -> dict:
+            fallback_result = detect_statistical_anomalies(
+                manager, column=power_column, dataset_name=dataset_name,
+                method="zscore", threshold=z_score_threshold,
+            )
+            if not fallback_result["ok"]:
+                return fallback_result
+            fallback_result["data"]["method_used"] = "fallback_statistical_zscore"
+            fallback_result["data"]["ml_gate_reason"] = reason
+            return fallback_result
+
+        try:
+            from sklearn.ensemble import IsolationForest
+        except ImportError as exc:
+            return _fallback(f"Không import được scikit-learn ({exc}) — dùng fallback rule-based.")
+
+        feature_cols = [power_column, wind_speed_column]
+        if pitch_column is not None:
+            col_error = _validate_column(manager, pitch_column, dataset_name)
+            if col_error:
+                return failure(col_error)
+            feature_cols.append(pitch_column)
+        if wind_speed_std_column is not None:
+            col_error = _validate_column(manager, wind_speed_std_column, dataset_name)
+            if col_error:
+                return failure(col_error)
+            feature_cols.append(wind_speed_std_column)
+
+        n = len(df)
+        split_idx = int(n * train_fraction)
+        class_series = pd.Series(classification)
+        class_series.index = class_series.index.astype(df.index.dtype) if len(class_series) else class_series.index
+        class_series = class_series.reindex(df.index)
+
+        pct_not_normal = (class_series != "Normal").mean()
+        contamination = min(max(round(float(pct_not_normal), 4), 0.001), 0.5)
+
+        features_all = df[feature_cols]
+        valid_mask = features_all.notna().all(axis=1)
+        train_mask = (pd.Series(df.index, index=df.index) < split_idx) & (class_series == "Normal") & valid_mask
+
+        if train_mask.sum() < 30:
+            return _fallback(f"Không đủ điểm 'Normal' trong tập train để fit Isolation Forest đáng tin cậy (chỉ {int(train_mask.sum())} điểm, cần >=30).")
+
+        iso = IsolationForest(contamination=contamination, random_state=random_state, n_jobs=-1)
+        iso.fit(features_all[train_mask])
+
+        preds = pd.Series(1, index=df.index)
+        preds[valid_mask] = iso.predict(features_all[valid_mask])
+        is_anomaly_if = preds == -1
+
+        # z-score tren power_column, cong thuc y het detect_statistical_anomalies() (method="zscore")
+        power_series = df[power_column].dropna()
+        mean_p, std_p = power_series.mean(), power_series.std()
+        if std_p == 0 or pd.isna(std_p):
+            return _fallback(f"Column '{power_column}' có std=0, không thể tính z-score để gate-check — dùng fallback.")
+        z = (df[power_column] - mean_p) / std_p
+        is_anomaly_zscore = (z.abs() > z_score_threshold).fillna(False)
+
+        n_if = int(is_anomaly_if.sum())
+        if n_if == 0:
+            return _fallback("Isolation Forest không flag điểm nào — không có gì để so gate, dùng fallback.")
+
+        overlap_pct = float(100 * (is_anomaly_if & is_anomaly_zscore).sum() / n_if)
+        gate_overlap_pass = bool(overlap_pct >= GATE_4A_MIN_OVERLAP_PCT)
+
+        if_only_idx = df.index[is_anomaly_if & (~is_anomaly_zscore)].tolist()
+        rng = np.random.RandomState(random_state)
+        sample_size = min(GATE_4A_MEANINGFUL_SAMPLE_SIZE, len(if_only_idx))
+        sample_idx = rng.choice(if_only_idx, size=sample_size, replace=False) if sample_size > 0 else np.array([])
+        meaningful_count = int(sum(class_series.loc[i] != "Normal" for i in sample_idx))
+        gate_meaning_pass = meaningful_count >= GATE_4A_MIN_MEANINGFUL_COUNT
+
+        gate_info = {
+            "overlap_pct_with_zscore": round(overlap_pct, 4),
+            "overlap_gate_threshold_pct": GATE_4A_MIN_OVERLAP_PCT,
+            "overlap_gate_pass": gate_overlap_pass,
+            "meaningful_sample_size": int(sample_size),
+            "meaningful_count": meaningful_count,
+            "meaningful_gate_min": GATE_4A_MIN_MEANINGFUL_COUNT,
+            "meaningful_gate_pass": gate_meaning_pass,
+        }
+
+        if not (gate_overlap_pass and gate_meaning_pass):
+            result = _fallback(
+                f"Gate 4a FAIL: overlap={overlap_pct:.2f}% (cần >={GATE_4A_MIN_OVERLAP_PCT}%), "
+                f"meaningful={meaningful_count}/{sample_size} (cần >={GATE_4A_MIN_MEANINGFUL_COUNT})."
+            )
+            if result["ok"]:
+                result["data"]["gate_4a"] = gate_info
+            return result
+
+        examples = _examples_from_mask(df, is_anomaly_if, ["datetime", power_column, wind_speed_column])
+        return success({
+            "method_used": "isolation_forest",
+            "gate_4a": gate_info,
+            "contamination_used": contamination,
+            "feature_columns": feature_cols,
+            "anomaly_count": n_if,
+            "anomaly_pct": round(100 * n_if / n, 4),
+            "examples": examples,
+        })
+    except Exception as exc:
+        return failure(str(exc))
+
+
+def _power_curve_interpolate(power_curve: dict, wind_speed_values) -> np.ndarray:
+    """Baseline 'ngay tho': noi suy tuyen tinh giua cac median_power cua power_curve
+    (tu estimate_power_curve(), TAI DUNG). Ngoai mien bin da biet -> np.interp tu dong
+    clamp ve gia tri bien gan nhat (hanh vi mac dinh cua numpy, khong tu ngoai suy)."""
+    valid_bins = sorted(
+        (b["wind_speed_bin_center"], b["median_power"])
+        for b in power_curve.get("power_curve", []) if b.get("median_power") is not None
+    )
+    if not valid_bins:
+        raise ValueError("power_curve không có bin nào có median_power hợp lệ để nội suy baseline.")
+    xs = [b[0] for b in valid_bins]
+    ys = [b[1] for b in valid_bins]
+    return np.interp(wind_speed_values, xs, ys)
+
+
+def predict_power(
+    manager: DatasetManager,
+    power_column: str,
+    wind_speed_column: str,
+    power_curve: dict,
+    classification: dict,
+    dataset_name: str | None = None,
+    feature_columns: list[str] | None = None,
+    train_fraction: float = 0.8,
+    random_state: int = 42,
+) -> dict:
+    """
+    XGBoost dự đoán power_column từ wind_speed_column + feature_columns bổ sung (pitch/
+    yaw/temperature — KHÔNG bao giờ dùng TheoActiveW làm feature, tránh leakage vì đó
+    gần như là đáp án). Baseline so sánh: nội suy tuyến tính power curve
+    (estimate_power_curve(), TÁI DÙNG). CHỈ dùng XGBoost nếu vượt CẢ Gate 4b (RMSE thấp
+    hơn baseline) VÀ Gate 4c (wind_speed xếp hạng #1 hoặc #2 feature importance) — không
+    đạt 1 trong 2 → tự động fallback về baseline nội suy, người gọi KHÔNG cần biết đằng
+    sau dùng gì.
+
+    ĐÃ VALIDATE THẬT (2026-09-08) trên cả GT1 và WT1 — CẢ 2 GATE ĐỀU PASS CẢ 2 SITE:
+    - GT1 (feature: WindSpd, Pitch.Angle1, WindTrackDevAng): XGBoost RMSE=269.11 <
+      baseline RMSE=305.15 (R²=0.9636 vs 0.9532). wind_speed xếp #1 (importance=0.9967).
+    - WT1 (feature: WIND_SPEED, PITCH, WIND_SPEED_STD, TEMPERATURE_STATOR — TEMPERATURE_
+      STATOR được chọn vì correlation_analysis (Phase 3 sáng) cho r=0.43, cao nhất trong
+      các cột nhiệt độ): XGBoost RMSE=135.12 < baseline RMSE=151.58 (R²=0.9070 vs
+      0.8830). wind_speed xếp #1 (importance=0.9894).
+    Khác với detect_anomalies_ml() (Gate 4a FAIL cả 2 site), predict_power() dùng
+    XGBoost THẬT trên cả 2 site khi gọi với đúng feature_columns nêu trên — đây không
+    phải mô phỏng, là kết quả đo thật.
+
+    Huấn luyện CHỈ trên điểm "Normal" (classify_turbine_status(), TÁI DÙNG) trong
+    train_fraction đầu (theo thời gian) — nhất quán phương pháp với estimate_power_curve()
+    cũng ước lượng từ điểm "gần curve". Dự đoán trên TOÀN BỘ tập test (không chỉ Normal)
+    để so sánh công bằng với thực tế vận hành.
+
+    Gate 4c nghiêm ngặt: nếu wind_speed xếp hạng thấp bất thường (>2), DỪNG dùng XGBoost
+    NGAY CẢ KHI Gate 4b pass — dấu hiệu nghi ngờ bug preprocessing (lệch thời gian giữa
+    feature/target, feature bị scale sai...), không chỉ đơn thuần "model kém".
+
+    xgboost và sklearn.metrics được import LAZY bên trong hàm (cùng lý do phòng hờ như
+    detect_anomalies_ml() — tránh lỗi thư viện ML làm sập cả module).
+    """
+    try:
+        df = manager.get_dataframe(dataset_name)
+        if df is None:
+            return failure(_dataset_not_found(manager, dataset_name))
+
+        feature_columns = feature_columns or []
+        all_features = [wind_speed_column] + [c for c in feature_columns if c != wind_speed_column]
+        for col in [power_column] + all_features:
+            col_error = _validate_column(manager, col, dataset_name)
+            if col_error:
+                return failure(col_error)
+        leakage_risk_cols = [c for c in ("GT1.Common.TheoActiveW", "GT1.SP.ActualSPP") if c in all_features]
+        if leakage_risk_cols:
+            return failure(
+                f"Không được dùng {leakage_risk_cols} làm feature — gây data leakage: "
+                "TheoActiveW gần như là đáp án lý thuyết cho power_column; ActualSPP "
+                "(setpoint) gần như quyết định trực tiếp power lúc Curtailment (xem rule "
+                "Curtailment trong classify_turbine_status(): |power-setpoint|/setpoint < "
+                "5%), nên cũng là leakage tương tự dù không dùng ~100% thời gian."
+            )
+
+        n = len(df)
+        split_idx = int(n * train_fraction)
+        class_series = pd.Series(classification)
+        class_series.index = class_series.index.astype(df.index.dtype) if len(class_series) else class_series.index
+        class_series = class_series.reindex(df.index)
+
+        valid_mask = df[all_features + [power_column]].notna().all(axis=1)
+        # dung VI TRI THU TU trong df (khong phai gia tri index) de xac dinh 80% dau/20%
+        # cuoi — an toan ke ca khi index khong lien tuc tu 0
+        row_position = pd.Series(range(n), index=df.index)
+        train_mask = (row_position < split_idx) & (class_series == "Normal") & valid_mask
+        test_mask = (row_position >= split_idx) & valid_mask
+
+        def _fallback(reason: str) -> dict:
+            try:
+                baseline_pred_fb = _power_curve_interpolate(power_curve, df.loc[test_mask, wind_speed_column].values)
+            except ValueError as exc:
+                return failure(str(exc))
+            actual_fb = df.loc[test_mask, power_column].values
+            if len(actual_fb) == 0:
+                return failure("Không có điểm nào trong tập test để đánh giá baseline (kiểm tra lại train_fraction/dữ liệu).")
+            rmse_fb = float(np.sqrt(np.mean((actual_fb - baseline_pred_fb) ** 2)))
+            mae_fb = float(np.mean(np.abs(actual_fb - baseline_pred_fb)))
+            ss_res = float(np.sum((actual_fb - baseline_pred_fb) ** 2))
+            ss_tot = float(np.sum((actual_fb - actual_fb.mean()) ** 2))
+            r2_fb = 1 - ss_res / ss_tot if ss_tot > 0 else None
+            return success({
+                "method_used": "power_curve_interpolation",
+                "ml_gate_reason": reason,
+                "test_size": int(len(actual_fb)),
+                "metrics": {"rmse": round(rmse_fb, 4), "mae": round(mae_fb, 4), "r2": (round(r2_fb, 4) if r2_fb is not None else None)},
+            })
+
+        if train_mask.sum() < 30:
+            return _fallback(f"Không đủ điểm 'Normal' trong tập train ({int(train_mask.sum())}, cần >=30).")
+        if test_mask.sum() < 10:
+            return _fallback(f"Không đủ điểm trong tập test ({int(test_mask.sum())}, cần >=10).")
+
+        try:
+            import xgboost as xgb
+        except ImportError as exc:
+            return _fallback(f"Không import được xgboost ({exc}) — dùng fallback power curve interpolation.")
+
+        X_train, y_train = df.loc[train_mask, all_features], df.loc[train_mask, power_column]
+        X_test, y_test = df.loc[test_mask, all_features], df.loc[test_mask, power_column]
+
+        model = xgb.XGBRegressor(random_state=random_state, n_estimators=100)
+        model.fit(X_train, y_train)
+        y_pred_xgb = model.predict(X_test)
+
+        baseline_pred = _power_curve_interpolate(power_curve, df.loc[test_mask, wind_speed_column].values)
+
+        y_test_arr = y_test.values
+        rmse_xgb = float(np.sqrt(np.mean((y_test_arr - y_pred_xgb) ** 2)))
+        rmse_baseline = float(np.sqrt(np.mean((y_test_arr - baseline_pred) ** 2)))
+        mae_xgb = float(np.mean(np.abs(y_test_arr - y_pred_xgb)))
+        mae_baseline = float(np.mean(np.abs(y_test_arr - baseline_pred)))
+
+        def _r2(actual, pred):
+            ss_res = float(np.sum((actual - pred) ** 2))
+            ss_tot = float(np.sum((actual - actual.mean()) ** 2))
+            return (1 - ss_res / ss_tot) if ss_tot > 0 else None
+
+        r2_xgb = _r2(y_test_arr, y_pred_xgb)
+        r2_baseline = _r2(y_test_arr, baseline_pred)
+
+        gate_4b_pass = bool(rmse_xgb < rmse_baseline)
+        gate_4b_info = {
+            "xgboost_rmse": round(rmse_xgb, 4),
+            "baseline_rmse": round(rmse_baseline, 4),
+            "xgboost_mae": round(mae_xgb, 4),
+            "baseline_mae": round(mae_baseline, 4),
+            "xgboost_r2": (round(r2_xgb, 4) if r2_xgb is not None else None),
+            "baseline_r2": (round(r2_baseline, 4) if r2_baseline is not None else None),
+            "gate_4b_pass": gate_4b_pass,
+        }
+
+        importances = model.feature_importances_
+        ranking = [{"feature": f, "importance": round(float(imp), 6)} for f, imp in sorted(zip(all_features, importances), key=lambda x: -x[1])]
+        wind_speed_rank = next(i for i, r in enumerate(ranking, 1) if r["feature"] == wind_speed_column)
+        gate_4c_pass = bool(wind_speed_rank <= 2)
+        gate_4c_info = {
+            "feature_importance_ranking": ranking,
+            "wind_speed_rank": wind_speed_rank,
+            "gate_4c_pass": gate_4c_pass,
+        }
+
+        if not gate_4b_pass:
+            result = _fallback(f"Gate 4b FAIL: XGBoost RMSE={rmse_xgb:.4f} không thấp hơn baseline RMSE={rmse_baseline:.4f}.")
+            if result["ok"]:
+                result["data"]["gate_4b"] = gate_4b_info
+            return result
+
+        if not gate_4c_pass:
+            result = _fallback(
+                f"Gate 4c FAIL: wind_speed xếp hạng #{wind_speed_rank} (cần <=2) — nghi ngờ "
+                "bug preprocessing (feature lệch thời gian, scale sai...), KHÔNG dùng XGBoost "
+                "dù Gate 4b có pass."
+            )
+            if result["ok"]:
+                result["data"]["gate_4b"] = gate_4b_info
+                result["data"]["gate_4c"] = gate_4c_info
+            return result
+
+        return success({
+            "method_used": "xgboost",
+            "gate_4b": gate_4b_info,
+            "gate_4c": gate_4c_info,
+            "feature_columns": all_features,
+            "test_size": int(len(y_test_arr)),
+            "metrics": {"rmse": round(rmse_xgb, 4), "mae": round(mae_xgb, 4), "r2": (round(r2_xgb, 4) if r2_xgb is not None else None)},
+            "baseline_metrics": {"rmse": round(rmse_baseline, 4), "mae": round(mae_baseline, 4), "r2": (round(r2_baseline, 4) if r2_baseline is not None else None)},
         })
     except Exception as exc:
         return failure(str(exc))
