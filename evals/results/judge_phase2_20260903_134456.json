@@ -1,0 +1,727 @@
+{
+  "timestamp": "2026-09-03T13:44:56.412129+00:00",
+  "n_cases": 21,
+  "parse_fail_ids": [
+    "kb_003"
+  ],
+  "total_agent_cost": 0.13445612,
+  "total_judge_cost": 0.14632500000000004,
+  "results": [
+    {
+      "case_id": "kb_001",
+      "category": "kb_qa",
+      "question": "Tỷ lệ hộ dân nông thôn có điện của EVN là bao nhiêu phần trăm?",
+      "answer": "Theo **Báo cáo thường niên 2024-2025 của EVN**, tỷ lệ hộ dân nông thôn có điện năm 2024 đạt **99,74%**.\n\nSố liệu trong các năm gần đây cho thấy tỷ lệ này liên tục được cải thiện:\n- 2020: 99,3%\n- 2021: 99,45%\n- 2022: 99,53%\n- 2023: 99,6%\n- 2024: 99,74%\n\n*(Nguồn: EVN Annual Report 2024-2025, trang 9, 10)*",
+      "hit_max_iterations": false,
+      "retrieved_chunks_count": 8,
+      "judge": {
+        "faithfulness": {
+          "score": 5,
+          "notes": "Mọi số liệu (99,74% năm 2024 và chuỗi số liệu 2020-2024) đều xuất hiện chính xác trong các chunk trích từ Báo cáo thường niên EVN 2024-2025 trang 9 và 10."
+        },
+        "correctness": {
+          "score": 5,
+          "notes": "Câu trả lời nêu chính xác con số 99,74%, khớp hoàn toàn với expected_answer_contains và gold evidence."
+        },
+        "citation_quality": {
+          "score": 5,
+          "notes": "Trích dẫn đầy đủ, chính xác tên nguồn và số trang (trang 9, 10 của Báo cáo thường niên 2024-2025), khớp với gold evidence."
+        },
+        "completeness": {
+          "score": 5,
+          "notes": "Trả lời trực diện, đầy đủ con số mới nhất cùng diễn biến qua các năm gần đây mà không bị lan man."
+        }
+      },
+      "agent_cost": 0.00576832,
+      "judge_cost": 0.00843525,
+      "agent_latency": 16.16528350004228,
+      "judge_latency": 6.9209275000030175,
+      "deterministic": {
+        "id": "kb_001",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 2,
+        "citation_correct": true
+      }
+    },
+    {
+      "case_id": "kb_002",
+      "category": "kb_qa",
+      "question": "Tổng sản lượng điện thương phẩm năm 2023 là bao nhiêu?",
+      "answer": "Theo Báo cáo thường niên của EVN, tổng sản lượng điện thương phẩm (lượng điện bán ra) năm 2023 là **253.053 triệu kWh** (tương đương khoảng 253 tỷ kWh).\n\nCụ thể, theo bảng \"Power sales\" trong **EVN Annual Report 2024-2025, trang 9**, lượng điện bán ra năm 2023 được phân bổ như sau:\n- Công nghiệp: 129.223 triệu kWh (51,07%)\n- Hành chính & Hộ gia đình: 90.736 triệu kWh (35,86%)\n- Thương mại & Khách sạn, Nhà hàng: 13.543 triệu kWh (5,35%)\n- Nông nghiệp: 9.135 triệu kWh (3,61%)\n- Khác: 10.414 triệu kWh (4,12%)\n\n*Lưu ý: Trong báo cáo thường niên cũ hơn (EVN Annual Report 2022-2023, trang 9), con số tổng sản lượng điện thương phẩm năm 2023 được ghi nhận là 253.532 triệu kWh. Sự chênh lệch nhỏ này có thể do quá trình rà soát, điều chỉnh số liệu giữa các kỳ báo cáo. Con số được trích dẫn ở trên là từ báo cáo mới nhất.*",
+      "hit_max_iterations": false,
+      "retrieved_chunks_count": 10,
+      "judge": {
+        "faithfulness": {
+          "score": 5,
+          "notes": "Mọi số liệu (253.053 triệu kWh, 253.532 triệu kWh cùng tỷ lệ cơ cấu phân bổ) đều xuất hiện chính xác trong các chunk trích xuất."
+        },
+        "correctness": {
+          "score": 5,
+          "notes": "Câu trả lời nêu đúng số liệu 253.053 triệu kWh (và cả 253.532 triệu kWh), hoàn toàn khớp với expected_answer_contains."
+        },
+        "citation_quality": {
+          "score": 5,
+          "notes": "Trích dẫn đầy đủ và chính xác cả nguồn chính (2024-2025, trang 9) nằm trong acceptable_alternative_evidence và nguồn đối chiếu (2022-2023, trang 9) khớp gold_evidence."
+        },
+        "completeness": {
+          "score": 5,
+          "notes": "Trả lời đầy đủ sản lượng thương phẩm năm 2023, bổ sung chi tiết cơ cấu và giải thích thỏa đáng sự khác biệt giữa hai kỳ báo cáo."
+        }
+      },
+      "agent_cost": 0.00939894,
+      "judge_cost": 0.009108,
+      "agent_latency": 25.097678999998607,
+      "judge_latency": 12.234201600018423,
+      "deterministic": {
+        "id": "kb_002",
+        "recall_5": false,
+        "recall_10": false,
+        "rank": null,
+        "citation_correct": true
+      }
+    },
+    {
+      "case_id": "kb_003",
+      "category": "kb_qa",
+      "question": "Tỷ lệ tổn thất điện năng của EVN là bao nhiêu?",
+      "answer": "Theo thông tin trong **Báo cáo thường niên 2022-2023 của EVN** (trang 10), tỷ lệ tổn thất điện năng của Tập đoàn Điện lực Việt Nam qua các năm gần đây như sau:\n\n* **2023:** 6.05%\n* **2022:** 6.25%\n* **2021:** 6.27%\n* **2020:** 6.42%\n* **2019:** 6.49%\n* **2018:** 7.04%\n\nCó thể thấy, tỷ lệ tổn thất điện năng của EVN liên tục được cải thiện và giảm dần, với mức giảm 0.2% vào năm 2023 so với năm 2022 nhờ việc ứng dụng khoa học công nghệ, chuyển đổi số và các biện pháp hiện đại hóa lưới điện.",
+      "hit_max_iterations": false,
+      "retrieved_chunks_count": 8,
+      "judge": null,
+      "agent_cost": 0.00502022,
+      "judge_cost": 0.0,
+      "agent_latency": 9.364864900009707,
+      "judge_latency": 10707.055820600013,
+      "deterministic": {
+        "id": "kb_003",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 1,
+        "citation_correct": true
+      }
+    },
+    {
+      "case_id": "kb_004",
+      "category": "kb_qa",
+      "error": "agent_error: Chat completion failed after 3 attempts: Connection error."
+    },
+    {
+      "case_id": "kb_005",
+      "category": "kb_qa",
+      "question": "EVN được thành lập vào năm nào?",
+      "answer": "Theo báo cáo thường niên của EVN, Tổng Công ty Điện lực Việt Nam (EVN) được Chính phủ Việt Nam thành lập dưới dạng doanh nghiệp Nhà nước vào năm **1994** và chính thức hoạt động theo mô hình công ty trách nhiệm hữu hạn một thành viên từ năm 2010.\n\nNguồn: *EVN Annual Report 2022-2023*, trang 5; *EVN Annual Report 2024-2025*, trang 6.",
+      "hit_max_iterations": false,
+      "retrieved_chunks_count": 8,
+      "judge": {
+        "faithfulness": {
+          "score": 5,
+          "notes": "Mọi thông tin trong câu trả lời (thành lập năm 1994, doanh nghiệp nhà nước, chuyển đổi sang TNHH MTV năm 2010) đều xuất hiện chính xác trong các chunk trích xuất."
+        },
+        "correctness": {
+          "score": 5,
+          "notes": "Câu trả lời nêu chính xác năm 1994, hoàn toàn khớp với đáp án chuẩn."
+        },
+        "citation_quality": {
+          "score": 5,
+          "notes": "Trích dẫn đầy đủ và chính xác cả nguồn gold evidence (2024-2025, trang 6) và alternative evidence (2022-2023, trang 5) một cách rõ ràng."
+        },
+        "completeness": {
+          "score": 5,
+          "notes": "Trả lời trực tiếp, đầy đủ trọng tâm câu hỏi và bổ sung ngữ cảnh chuyển đổi mô hình rất phù hợp, không lan man."
+        }
+      },
+      "agent_cost": 0.00445486,
+      "judge_cost": 0.00812775,
+      "agent_latency": 88.24546980002197,
+      "judge_latency": 11.018738399958238,
+      "deterministic": {
+        "id": "kb_005",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 1,
+        "citation_correct": true
+      }
+    },
+    {
+      "case_id": "kb_006",
+      "category": "kb_qa",
+      "question": "Theo Chỉ thị 20, cả nước cần tiết kiệm tối thiểu bao nhiêu phần trăm tổng điện năng tiêu thụ mỗi năm?",
+      "answer": "Theo Chỉ thị 20/CT-TTg về tăng cường tiết kiệm điện giai đoạn 2023-2025, cả nước cần phấn đấu hằng năm tiết kiệm **tối thiểu 2,0% tổng điện năng tiêu thụ**.\n\nNguồn: *Chỉ thị 20/CT-TTg về tăng cường tiết kiệm điện giai đoạn 2023-2025*, trang 0.",
+      "hit_max_iterations": false,
+      "retrieved_chunks_count": 8,
+      "judge": {
+        "faithfulness": {
+          "score": 5,
+          "notes": "Mọi thông tin trong câu trả lời đều được lấy trực tiếp và chính xác từ chunk trang 0 của Chỉ thị 20/CT-TTg."
+        },
+        "correctness": {
+          "score": 5,
+          "notes": "Số liệu '2,0%' hoàn toàn chính xác theo đúng expected answer và nội dung văn bản."
+        },
+        "citation_quality": {
+          "score": 5,
+          "notes": "Trích dẫn đầy đủ và chính xác tên văn bản cùng số trang 0, khớp hoàn toàn với gold evidence."
+        },
+        "completeness": {
+          "score": 5,
+          "notes": "Trả lời trực diện, đầy đủ và đúng trọng tâm câu hỏi đặt ra mà không lan man."
+        }
+      },
+      "agent_cost": 0.0037104,
+      "judge_cost": 0.005166,
+      "agent_latency": 45.464604799984954,
+      "judge_latency": 11.098501399974339,
+      "deterministic": {
+        "id": "kb_006",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 2,
+        "citation_correct": true
+      }
+    },
+    {
+      "case_id": "kb_007",
+      "category": "kb_qa",
+      "question": "Chỉ thị 20/CT-TTg do cơ quan nào ban hành?",
+      "answer": "Chỉ thị 20/CT-TTg do **Thủ tướng Chính phủ** ban hành. \n\nCụ thể, Kho tài liệu có đề cập đến Chỉ thị số 20/CT-TTg ngày 08 tháng 6 năm 2023 về việc tăng cường tiết kiệm điện giai đoạn 2023 - 2025 và các năm tiếp theo do Thủ tướng Chính phủ ban hành. (Nguồn: Chỉ thị 20/CT-TTg về tăng cường tiết kiệm điện giai đoạn 2023-2025).",
+      "hit_max_iterations": false,
+      "retrieved_chunks_count": 2,
+      "judge": {
+        "faithfulness": {
+          "score": 5,
+          "notes": "Mọi thông tin trong câu trả lời đều được lấy trực tiếp từ các chunk văn bản được cung cấp."
+        },
+        "correctness": {
+          "score": 5,
+          "notes": "Câu trả lời hoàn toàn chính xác và khớp với expected_answer_contains (Thủ tướng Chính phủ)."
+        },
+        "citation_quality": {
+          "score": 3,
+          "notes": "Đã trích dẫn đúng tên văn bản nguồn nhưng thiếu số trang/mục cụ thể."
+        },
+        "completeness": {
+          "score": 5,
+          "notes": "Trả lời trực diện, đầy đủ và chính xác cơ quan ban hành theo yêu cầu của câu hỏi."
+        }
+      },
+      "agent_cost": 0.00334612,
+      "judge_cost": 0.0041955,
+      "agent_latency": 60.51735279994318,
+      "judge_latency": 10.3001792000141,
+      "deterministic": {
+        "id": "kb_007",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 1,
+        "citation_correct": true
+      }
+    },
+    {
+      "case_id": "kb_008",
+      "category": "kb_qa",
+      "question": "Theo khuyến nghị tiết kiệm điện, hộ gia đình nên cài điều hòa ở mức nhiệt độ bao nhiêu trở lên?",
+      "answer": "Theo khuyến nghị tiết kiệm điện tại các hộ gia đình, người dân nên chỉ sử dụng điều hòa khi thật cần thiết và cài đặt ở mức nhiệt độ phù hợp, cụ thể là chế độ làm lạnh từ **26 độ C trở lên**.\n\nNguồn: Chỉ thị 20/CT-TTg về tăng cường tiết kiệm điện giai đoạn 2023-2025, trang 1.",
+      "hit_max_iterations": false,
+      "retrieved_chunks_count": 5,
+      "judge": {
+        "faithfulness": {
+          "score": 5,
+          "notes": "Mọi thông tin trong câu trả lời đều được trích xuất chính xác và trực tiếp từ nội dung chunk 1."
+        },
+        "correctness": {
+          "score": 5,
+          "notes": "Câu trả lời hoàn toàn chính xác, chứa đúng thông tin '26 độ C trở lên' khớp với đáp án chuẩn."
+        },
+        "citation_quality": {
+          "score": 5,
+          "notes": "Trích dẫn đầy đủ, rõ ràng và khớp hoàn toàn với gold evidence cả về tên nguồn lẫn số trang."
+        },
+        "completeness": {
+          "score": 5,
+          "notes": "Trả lời trực diện, đầy đủ và chính xác câu hỏi mà không lan man."
+        }
+      },
+      "agent_cost": 0.0045854,
+      "judge_cost": 0.00464175,
+      "agent_latency": 49.67418740002904,
+      "judge_latency": 7.712182999996003,
+      "deterministic": {
+        "id": "kb_008",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 1,
+        "citation_correct": true
+      }
+    },
+    {
+      "case_id": "kb_009",
+      "category": "kb_qa",
+      "question": "Theo Chỉ thị 20, tổn thất điện năng cần giảm xuống dưới bao nhiêu phần trăm vào năm 2025?",
+      "answer": "Theo Chỉ thị 20/CT-TTg ngày 08 tháng 6 năm 2023 về việc tăng cường tiết kiệm điện giai đoạn 2023 - 2025, tổn thất điện năng trên toàn hệ thống điện cần giảm xuống **dưới 6%** vào năm 2025.\n\n*Nguồn: Chỉ thị 20/CT-TTg về tăng cường tiết kiệm điện giai đoạn 2023-2025*",
+      "hit_max_iterations": false,
+      "retrieved_chunks_count": 8,
+      "judge": {
+        "faithfulness": {
+          "score": 5,
+          "notes": "Mọi thông tin trong câu trả lời đều được lấy trực tiếp và chính xác từ chunk được cung cấp (trang 0)."
+        },
+        "correctness": {
+          "score": 5,
+          "notes": "Câu trả lời nêu chính xác con số 'dưới 6%' theo đúng đáp án chuẩn."
+        },
+        "citation_quality": {
+          "score": 3,
+          "notes": "Trích dẫn đúng tên văn bản Chỉ thị 20/CT-TTg nhưng thiếu số trang/mục (trang 0)."
+        },
+        "completeness": {
+          "score": 5,
+          "notes": "Câu trả lời đúng trọng tâm câu hỏi, đầy đủ và không lan man."
+        }
+      },
+      "agent_cost": 0.00353276,
+      "judge_cost": 0.005553,
+      "agent_latency": 21.161584000044968,
+      "judge_latency": 11.19581050000852,
+      "deterministic": null
+    },
+    {
+      "case_id": "kb_010",
+      "category": "kb_qa",
+      "question": "Theo Chỉ thị 20, hoạt động chiếu sáng công cộng phải tiết kiệm tối thiểu bao nhiêu phần trăm điện năng trong giai đoạn 2023-2025?",
+      "answer": "Theo **Chỉ thị 20/CT-TTg về tăng cường tiết kiệm điện giai đoạn 2023-2025**, hoạt động chiếu sáng công cộng (kết hợp với chiếu sáng cho mục đích quảng cáo, trang trí ngoài trời) phải đảm bảo tiết kiệm tối thiểu **30%** tổng điện năng tiêu thụ trong giai đoạn 2023-2025.\n\n*Nguồn: Chỉ thị 20/CT-TTg về tăng cường tiết kiệm điện giai đoạn 2023-2025, trang 1*",
+      "hit_max_iterations": false,
+      "retrieved_chunks_count": 8,
+      "judge": {
+        "faithfulness": {
+          "score": 5,
+          "notes": "Mọi thông tin và số liệu trong câu trả lời đều được trích xuất trực tiếp và chính xác từ chunk trang 1."
+        },
+        "correctness": {
+          "score": 5,
+          "notes": "Câu trả lời hoàn toàn chính xác theo gold evidence và chứa đúng số liệu '30%'."
+        },
+        "citation_quality": {
+          "score": 5,
+          "notes": "Trích dẫn đầy đủ và chính xác tên văn bản cùng số trang khớp với gold evidence."
+        },
+        "completeness": {
+          "score": 5,
+          "notes": "Trả lời đầy đủ, ngắn gọn và chính xác đúng trọng tâm câu hỏi đặt ra."
+        }
+      },
+      "agent_cost": 0.00500396,
+      "judge_cost": 0.00539175,
+      "agent_latency": 107.51654420001432,
+      "judge_latency": 9.286359399964567,
+      "deterministic": null
+    },
+    {
+      "case_id": "kb_011",
+      "category": "kb_qa",
+      "question": "Theo IEA, tiêu chuẩn hiệu suất năng lượng tối thiểu (MEPS) đã có mặt tại bao nhiêu quốc gia tính đến năm 2023?",
+      "answer": "Theo báo cáo của IEA, tính đến năm 2023, các tiêu chuẩn hiệu suất năng lượng tối thiểu (MEPS) đã được áp dụng tại hơn **110 quốc gia** trên toàn thế giới, bao gồm tất cả các quốc gia tiêu thụ năng lượng lớn nhất.\n\nNguồn: *[Energy Efficiency 2023, p.82]*",
+      "hit_max_iterations": false,
+      "retrieved_chunks_count": 5,
+      "judge": {
+        "faithfulness": {
+          "score": 5,
+          "notes": "Mọi thông tin và số liệu trong câu trả lời đều khớp hoàn toàn với nội dung của chunk Energy Efficiency 2023, trang 82."
+        },
+        "correctness": {
+          "score": 5,
+          "notes": "Câu trả lời hoàn toàn chính xác, chứa đúng số liệu '110' theo yêu cầu của đáp án chuẩn."
+        },
+        "citation_quality": {
+          "score": 5,
+          "notes": "Trích dẫn chính xác tuyệt đối tên tài liệu và số trang khớp với gold evidence (Energy Efficiency 2023, trang 82)."
+        },
+        "completeness": {
+          "score": 5,
+          "notes": "Câu trả lời đúng trọng tâm câu hỏi, cung cấp đầy đủ thông tin về số lượng quốc gia áp dụng MEPS năm 2023 mà không lan man."
+        }
+      },
+      "agent_cost": 0.00424788,
+      "judge_cost": 0.00626625,
+      "agent_latency": 26.066466599993873,
+      "judge_latency": 10.949987699976191,
+      "deterministic": {
+        "id": "kb_011",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 1,
+        "citation_correct": true
+      }
+    },
+    {
+      "case_id": "kb_012",
+      "category": "kb_qa",
+      "question": "Theo IEA, có bao nhiêu quốc gia đã áp dụng hoặc đang xây dựng tiêu chuẩn/nhãn năng lượng bắt buộc cho thiết bị gia dụng chính?",
+      "answer": "Theo báo cáo *Energy Efficiency 2021* của IEA, có **hơn 120 quốc gia** đã áp dụng hoặc đang trong quá trình xây dựng các tiêu chuẩn hiệu suất năng lượng và nhãn năng lượng bắt buộc cho các thiết bị gia dụng chính (bao gồm điều hòa không khí, tủ lạnh, đèn chiếu sáng, tivi, máy giặt và thiết bị nấu ăn) [Energy Efficiency 2021, trang 16].",
+      "hit_max_iterations": false,
+      "retrieved_chunks_count": 8,
+      "judge": {
+        "faithfulness": {
+          "score": 5,
+          "notes": "Mọi thông tin và số liệu trong câu trả lời đều được trích xuất chính xác từ chunk tài liệu Energy Efficiency 2021, trang 16."
+        },
+        "correctness": {
+          "score": 5,
+          "notes": "Câu trả lời chứa chính xác con số hơn 120 quốc gia theo đúng expected_answer_contains."
+        },
+        "citation_quality": {
+          "score": 1,
+          "notes": "Trích dẫn Energy Efficiency 2021, trang 16 sai hoàn toàn so với gold_evidence yêu cầu là Energy Efficiency 2024, trang 33."
+        },
+        "completeness": {
+          "score": 5,
+          "notes": "Câu trả lời trả lời đúng và đầy đủ trọng tâm câu hỏi về số lượng quốc gia theo IEA."
+        }
+      },
+      "agent_cost": 0.00549718,
+      "judge_cost": 0.00899475,
+      "agent_latency": 28.95955909998156,
+      "judge_latency": 11.978932700003497,
+      "deterministic": {
+        "id": "kb_012",
+        "recall_5": false,
+        "recall_10": false,
+        "rank": null,
+        "citation_correct": false
+      }
+    },
+    {
+      "case_id": "kb_013",
+      "category": "kb_qa",
+      "question": "Theo World Energy Outlook 2025 của IEA, nhu cầu điện toàn cầu tăng trưởng trung bình bao nhiêu phần trăm mỗi năm trong thập kỷ qua?",
+      "answer": "Theo báo cáo *World Energy Outlook 2025* của Cơ quan Năng lượng Quốc tế (IEA), nhu cầu điện toàn cầu đã tăng trưởng trung bình **gần 3% mỗi năm** trong thập kỷ qua. Tốc độ tăng trưởng này gần gấp đôi mức tăng trưởng của tổng nhu cầu năng lượng nói chung.\n\nNguồn: *World Energy Outlook 2025*, trang 194.",
+      "hit_max_iterations": false,
+      "retrieved_chunks_count": 8,
+      "judge": {
+        "faithfulness": {
+          "score": 5,
+          "notes": "Mọi thông tin và số liệu (gần 3% mỗi năm, gần gấp đôi mức tăng trưởng của tổng nhu cầu năng lượng) đều trích xuất trực tiếp từ chunk World Energy Outlook 2025, trang 194."
+        },
+        "correctness": {
+          "score": 5,
+          "notes": "Câu trả lời hoàn toàn chính xác theo nội dung báo cáo và chứa đúng chuỗi đáp án chuẩn '3%'."
+        },
+        "citation_quality": {
+          "score": 4,
+          "notes": "Trích dẫn rõ ràng, đúng tên báo cáo và đúng trang 194 chứa thông tin thực tế trong chunk, dù số trang có chút khác biệt so với gold_evidence (trang 174)."
+        },
+        "completeness": {
+          "score": 5,
+          "notes": "Trả lời trực diện, đầy đủ thông tin câu hỏi yêu cầu cùng ngữ cảnh so sánh hữu ích, không lan man."
+        }
+      },
+      "agent_cost": 0.0060381,
+      "judge_cost": 0.01297275,
+      "agent_latency": 24.884639800002333,
+      "judge_latency": 31.63935950002633,
+      "deterministic": {
+        "id": "kb_013",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 1,
+        "citation_correct": false
+      }
+    },
+    {
+      "case_id": "kb_014",
+      "category": "kb_qa",
+      "question": "Theo IEA, Trung Quốc chiếm bao nhiêu phần trăm trong mức tăng trưởng nhu cầu điện toàn cầu bổ sung tới năm 2035?",
+      "answer": "Theo báo cáo **World Energy Outlook 2025** của IEA, Trung Quốc chiếm **40%** mức tăng trưởng nhu cầu điện toàn cầu bổ sung (additional global electricity demand) tính đến năm 2035 trong kịch bản STEPS (Stated Policies Scenario).\n\nDù các nền kinh tế mới nổi và đang phát triển nói chung chiếm khoảng ba phần tư tổng nhu cầu điện bổ sung toàn cầu giai đoạn này, Trung Quốc riêng lẻ đã chiếm tới 40% tổng mức tăng đó, khẳng định vị thế là quốc gia tiêu thụ điện lớn nhất thế giới.\n\n*Nguồn: World Energy Outlook 2025, trang 194*",
+      "hit_max_iterations": false,
+      "retrieved_chunks_count": 8,
+      "judge": {
+        "faithfulness": {
+          "score": 5,
+          "notes": "Mọi thông tin và số liệu (40%, kịch bản STEPS, ba phần tư, năm 2035) đều được trích xuất chính xác từ chunk WEO 2025 trang 194."
+        },
+        "correctness": {
+          "score": 5,
+          "notes": "Câu trả lời hoàn toàn chính xác và chứa đúng số liệu '40%' theo yêu cầu của đáp án chuẩn."
+        },
+        "citation_quality": {
+          "score": 3,
+          "notes": "Trích dẫn đúng tên báo cáo (World Energy Outlook 2025) theo tài liệu được truy xuất, nhưng số trang (trang 194) không khớp với danh sách gold_evidence (Energy Efficiency 2024 trang 104) hay acceptable_alternative_evidence (WEO 2025 trang 404)."
+        },
+        "completeness": {
+          "score": 5,
+          "notes": "Câu trả lời trả lời trực diện, đầy đủ con số và ngữ cảnh kịch bản, không thừa không thiếu."
+        }
+      },
+      "agent_cost": 0.00501932,
+      "judge_cost": 0.0115095,
+      "agent_latency": 14.1322657999699,
+      "judge_latency": 14.845886900031473,
+      "deterministic": {
+        "id": "kb_014",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 2,
+        "citation_correct": false
+      }
+    },
+    {
+      "case_id": "both_001",
+      "category": "both",
+      "question": "Theo quy định, một cơ sở sản xuất tiêu thụ 2 triệu kWh điện mỗi năm cần tiết kiệm tối thiểu bao nhiêu kWh?",
+      "answer": "Theo quy định tại **Chỉ thị 20/CT-TTg về tăng cường tiết kiệm điện giai đoạn 2023-2025** (ban hành ngày 08 tháng 6 năm 2023 của Thủ tướng Chính phủ), các cơ sở sử dụng năng lượng có điện năng tiêu thụ từ 01 triệu kWh/năm trở lên **phải tiết kiệm ít nhất 2% tổng điện năng tiêu thụ trong năm**.\n\nDo cơ sở sản xuất của bạn tiêu thụ 2 triệu kWh mỗi năm (trên ngưỡng 1 triệu kWh/năm), mức tiết kiệm tối thiểu áp dụng là 2%.\n\nDựa trên công thức tính, lượng điện năng cần tiết kiệm tối thiểu là:\n**40.000 kWh/năm** (tương đương 2% của 2.000.000 kWh).\n\n*(Nguồn: Chỉ thị 20/CT-TTg về tăng cường tiết kiệm điện giai đoạn 2023-2025, trang 1)*",
+      "hit_max_iterations": false,
+      "retrieved_chunks_count": 5,
+      "judge": {
+        "faithfulness": {
+          "score": 5,
+          "notes": "Mọi thông tin về văn bản, ngưỡng tiêu thụ điện và tỷ lệ tiết kiệm tối thiểu đều khớp chính xác với chunks retrieve được, phép tính dựa đúng trên quy định."
+        },
+        "correctness": {
+          "score": 5,
+          "notes": "Câu trả lời đưa ra con số chính xác là 40.000 kWh/năm, khớp hoàn toàn với expected_answer_contains."
+        },
+        "citation_quality": {
+          "score": 5,
+          "notes": "Trích dẫn đầy đủ và chính xác tên văn bản cùng số trang (Chỉ thị 20/CT-TTg, trang 1), khớp hoàn toàn với gold_evidence."
+        },
+        "completeness": {
+          "score": 5,
+          "notes": "Câu trả lời giải quyết trọn vẹn câu hỏi, nêu rõ căn cứ pháp lý, điều kiện áp dụng và kết quả tính toán chi tiết."
+        }
+      },
+      "agent_cost": 0.0064831,
+      "judge_cost": 0.00534825,
+      "agent_latency": 22.322546100011095,
+      "judge_latency": 6.758707999950275,
+      "deterministic": {
+        "id": "both_001",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 1,
+        "citation_correct": true
+      }
+    },
+    {
+      "case_id": "both_002",
+      "category": "both",
+      "question": "Một cơ quan nhà nước tiêu thụ 500.000 kWh điện mỗi năm, theo quy định cần tiết kiệm tối thiểu bao nhiêu kWh?",
+      "answer": "Theo quy định tại **Chỉ thị 20/CT-TTg về tăng cường tiết kiệm điện giai đoạn 2023-2025** (trang 1), các cơ quan nhà nước và công sở phải đảm bảo hằng năm tối thiểu tiết kiệm **5,0%** tổng điện năng tiêu thụ.\n\nÁp dụng tỷ lệ này cho mức tiêu thụ 500.000 kWh, lượng điện cơ quan này cần tiết kiệm tối thiểu là **25.000 kWh** mỗi năm.\n\n*(Nguồn: Chỉ thị 20/CT-TTg về tăng cường tiết kiệm điện giai đoạn 2023-2025, trang 1)*",
+      "hit_max_iterations": false,
+      "retrieved_chunks_count": 8,
+      "judge": {
+        "faithfulness": {
+          "score": 5,
+          "notes": "Mọi thông tin về tỷ lệ tiết kiệm 5,0% đối với cơ quan, công sở đều truy xuất trực tiếp từ chunk trang 1, phép tính số học hoàn toàn chính xác."
+        },
+        "correctness": {
+          "score": 5,
+          "notes": "Câu trả lời đưa ra chính xác con số 25.000 kWh, khớp hoàn toàn với đáp án chuẩn."
+        },
+        "citation_quality": {
+          "score": 5,
+          "notes": "Trích dẫn đầy đủ, chính xác tên văn bản Chỉ thị 20/CT-TTg và trang 1, khớp đúng gold evidence."
+        },
+        "completeness": {
+          "score": 5,
+          "notes": "Trả lời đúng trọng tâm câu hỏi, nêu rõ căn cứ pháp lý, tỷ lệ quy định và kết quả tính toán cụ thể."
+        }
+      },
+      "agent_cost": 0.00749096,
+      "judge_cost": 0.00535125,
+      "agent_latency": 34.09992930002045,
+      "judge_latency": 7.371491099998821,
+      "deterministic": {
+        "id": "both_002",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 1,
+        "citation_correct": true
+      }
+    },
+    {
+      "case_id": "both_003",
+      "category": "both",
+      "question": "Theo báo cáo thường niên EVN 2022-2023, nếu tỷ lệ tổn thất điện năng và tổng sản lượng sản xuất/mua năm 2023 là các con số đã công bố trong chính báo cáo đó, thì lượng điện tổn thất khoảng bao nhiêu tỷ kWh?",
+      "answer": "Dựa trên số liệu trích xuất từ báo cáo thường niên của Tổng công ty Điện lực Việt Nam (EVN), các chỉ số liên quan đến năm 2023 như sau:\n\n* **Tổng sản lượng sản xuất và mua điện năm 2023:** 271.679 triệu kWh (Nguồn: *EVN Annual Report 2022-2023*, trang 6)\n* **Tỷ lệ tổn thất điện năng năm 2023:** 6,05% (Nguồn: *EVN Annual Report 2024-2025*, trang 10)\n\nÁp dụng tỷ lệ tổn thất đã công bố vào tổng sản lượng để tính toán lượng điện hao hụt thực tế:\n`Lượng điện tổn thất = 6,05% × 271.679 triệu kWh ≈ 16.437 triệu kWh`\n\nĐổi sang đơn vị tỷ kWh, lượng điện tổn thất ước tính vào khoảng **16,44 tỷ kWh** cho năm 2023.",
+      "hit_max_iterations": false,
+      "retrieved_chunks_count": 18,
+      "judge": {
+        "faithfulness": {
+          "score": 5,
+          "notes": "Mọi số liệu trong câu trả lời (sản lượng 271.679 triệu kWh và tỷ lệ tổn thất 6,05%) đều được lấy chính xác từ các chunks được cung cấp."
+        },
+        "correctness": {
+          "score": 5,
+          "notes": "Kết quả tính toán đưa ra con số 16,44 tỷ kWh, khớp hoàn toàn với khoảng giá trị trong expected_answer_contains (chứa '16,4')."
+        },
+        "citation_quality": {
+          "score": 3,
+          "notes": "Agent trích đúng tên nguồn báo cáo 2022-2023 nhưng số trang chưa khớp với gold_evidence (trích trang 6 thay vì trang 10), đồng thời trích nhầm số liệu tổn thất sang báo cáo 2024-2025 trang 10."
+        },
+        "completeness": {
+          "score": 5,
+          "notes": "Câu trả lời giải quyết trọn vẹn yêu cầu câu hỏi, nêu rõ các số liệu đầu vào, phép tính và kết quả cuối cùng theo đơn vị tỷ kWh."
+        }
+      },
+      "agent_cost": 0.0245254,
+      "judge_cost": 0.0158055,
+      "agent_latency": 121.54941780003719,
+      "judge_latency": 30.20401159999892,
+      "deterministic": {
+        "id": "both_003",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 5,
+        "citation_correct": true
+      }
+    },
+    {
+      "case_id": "both_004",
+      "category": "both",
+      "question": "Một hệ thống chiếu sáng công cộng tiêu thụ 10.000 kWh, theo Chỉ thị 20 cần tiết kiệm tối thiểu bao nhiêu kWh?",
+      "answer": "Theo **Chỉ thị 20/CT-TTg về tăng cường tiết kiệm điện giai đoạn 2023-2025** (trang 1), đối với hoạt động chiếu sáng công cộng, cơ quan, tổ chức phải đảm bảo **tối thiểu tiết kiệm 30%** tổng điện năng tiêu thụ.\n\nÁp dụng vào hệ thống chiếu sáng của bạn với mức tiêu thụ 10.000 kWh:\n* Mức tiết kiệm điện tối thiểu cần đạt là: **3.000 kWh**.\n\n*Nguồn: Chỉ thị 20/CT-TTg về tăng cường tiết kiệm điện giai đoạn 2023-2025, trang 1.*",
+      "hit_max_iterations": false,
+      "retrieved_chunks_count": 8,
+      "judge": {
+        "faithfulness": {
+          "score": 5,
+          "notes": "Mọi thông tin về tỷ lệ tiết kiệm 30% đối với chiếu sáng công cộng đều được lấy trực tiếp từ chunk trang 1, phép tính số học hoàn toàn chính xác theo dữ kiện câu hỏi."
+        },
+        "correctness": {
+          "score": 5,
+          "notes": "Câu trả lời đưa ra con số 3.000 kWh, hoàn toàn trùng khớp với đáp án chuẩn."
+        },
+        "citation_quality": {
+          "score": 5,
+          "notes": "Trích dẫn đầy đủ và chính xác tên văn bản Chỉ thị 20 và số trang 1, khớp hoàn hảo với gold_evidence."
+        },
+        "completeness": {
+          "score": 5,
+          "notes": "Trả lời trực tiếp, đầy đủ căn cứ tỷ lệ quy định và kết quả tính toán cụ thể theo yêu cầu của câu hỏi."
+        }
+      },
+      "agent_cost": 0.00603442,
+      "judge_cost": 0.0052725,
+      "agent_latency": 26.010184100014158,
+      "judge_latency": 6.039100099995267,
+      "deterministic": {
+        "id": "both_004",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 2,
+        "citation_correct": true
+      }
+    },
+    {
+      "case_id": "both_005",
+      "category": "both",
+      "question": "Một doanh nghiệp sản xuất tiêu thụ 3 triệu kWh điện mỗi năm, theo Chỉ thị 20 cần tiết kiệm tối thiểu bao nhiêu kWh?",
+      "answer": "Theo **Chỉ thị 20/CT-TTg về tăng cường tiết kiệm điện giai đoạn 2023-2025** (Mục 1), đối với doanh nghiệp sản xuất có điện năng tiêu thụ từ 01 triệu kWh/năm trở lên, quy định yêu cầu phải tiết kiệm **ít nhất 2% tổng điện năng tiêu thụ trong năm**.\n\nVới mức tiêu thụ 3 triệu kWh/năm, doanh nghiệp cần tiết kiệm tối thiểu:\n**60.000 kWh/năm** (tương đương 2% của 3.000.000 kWh).\n\n*(Nguồn: Chỉ thị 20/CT-TTg về tăng cường tiết kiệm điện giai đoạn 2023-2025, trang 1)*",
+      "hit_max_iterations": false,
+      "retrieved_chunks_count": 5,
+      "judge": {
+        "faithfulness": {
+          "score": 5,
+          "notes": "Mọi thông tin về tỷ lệ tiết kiệm (2%) và ngưỡng áp dụng đều dựa trực tiếp trên chunk tài liệu trang 1, phép tính toán học hoàn toàn chuẩn xác."
+        },
+        "correctness": {
+          "score": 5,
+          "notes": "Câu trả lời tính ra chính xác 60.000 kWh/năm, khớp hoàn toàn với yêu cầu và chuỗi mong đợi."
+        },
+        "citation_quality": {
+          "score": 5,
+          "notes": "Trích dẫn đầy đủ và chính xác tên văn bản Chỉ thị 20 và trang 1 theo đúng gold evidence."
+        },
+        "completeness": {
+          "score": 5,
+          "notes": "Câu trả lời giải thích rõ căn cứ quy định, đưa ra con số tính toán cụ thể và trả lời trúng trọng tâm câu hỏi."
+        }
+      },
+      "agent_cost": 0.00604264,
+      "judge_cost": 0.00562275,
+      "agent_latency": 28.162986700015608,
+      "judge_latency": 9.828043299959973,
+      "deterministic": {
+        "id": "both_005",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 2,
+        "citation_correct": true
+      }
+    },
+    {
+      "case_id": "both_006",
+      "category": "both",
+      "question": "Theo IEA, nếu một khu vực hiện tiêu thụ 500.000 GWh điện và áp dụng đúng tốc độ tăng trưởng nhu cầu điện toàn cầu trung bình mỗi năm trong thập kỷ qua mà IEA đã công bố, thì mức tăng trong 1 năm là bao nhiêu GWh?",
+      "answer": "Dựa theo báo cáo *World Energy Outlook 2025* của IEA, tốc độ tăng trưởng nhu cầu điện toàn cầu trung bình mỗi năm trong thập kỷ qua là **gần 3%/năm** [World Energy Outlook 2025, p.194].\n\nÁp dụng tốc độ tăng trưởng 3% này vào mức tiêu thụ hiện tại 500.000 GWh:\n\n- Mức tăng trong 1 năm = 3% của 500.000 GWh = **15.000 GWh**.\n\nVậy mức tăng nhu cầu điện trong 1 năm sẽ là **15.000 GWh**.\n\n*(Lưu ý: Một số báo cáo khác của IEA cũng đề cập mức tăng trưởng trung bình khoảng 2,5%/năm trong giai đoạn 2010–2019 [Energy Efficiency 2025, p.16], tuy nhiên con số 3% trong World Energy Outlook 2025 là cập nhật nhất cho \"thập kỷ qua\".)*",
+      "hit_max_iterations": false,
+      "retrieved_chunks_count": 5,
+      "judge": {
+        "faithfulness": {
+          "score": 5,
+          "notes": "Mọi thông tin về tốc độ tăng trưởng 'gần 3%/năm' và phép tính 15.000 GWh đều được suy luận trực tiếp từ chunk World Energy Outlook 2025 (trang 194)."
+        },
+        "correctness": {
+          "score": 5,
+          "notes": "Kết quả tính toán '15.000 GWh' khớp chính xác với đáp án chuẩn được yêu cầu."
+        },
+        "citation_quality": {
+          "score": 1,
+          "notes": "Trích dẫn World Energy Outlook 2025, trang 194 sai hoàn toàn so với gold_evidence là World Energy Outlook 2019, trang 259 (và không có trong acceptable_alternative_evidence)."
+        },
+        "completeness": {
+          "score": 5,
+          "notes": "Câu trả lời giải quyết trọn vẹn và chính xác câu hỏi đặt ra, có kèm phép tính rõ ràng."
+        }
+      },
+      "agent_cost": 0.0085151,
+      "judge_cost": 0.00800175,
+      "agent_latency": 24.4736583000049,
+      "judge_latency": 12.852506499970332,
+      "deterministic": {
+        "id": "both_006",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 3,
+        "citation_correct": false
+      }
+    },
+    {
+      "case_id": "both_007",
+      "category": "both",
+      "question": "Theo IEA, nếu tổng mức tăng trưởng nhu cầu điện toàn cầu bổ sung tới năm 2035 là 2.000 TWh, thì phần đóng góp riêng của Trung Quốc trong mức tăng trưởng đó là bao nhiêu TWh, dựa theo tỷ lệ IEA đã công bố?",
+      "answer": "Theo thông tin từ báo cáo **World Energy Outlook 2025** của IEA, Trung Quốc chịu trách nhiệm cho **40%** mức tăng trưởng nhu cầu điện toàn cầu từ năm 2024 đến năm 2035 trong kịch bản Chính sách hiện hành (STEPS).\n\nDựa trên tỷ lệ này, nếu tổng mức tăng trưởng nhu cầu điện toàn cầu bổ sung tới năm 2035 là 2.000 TWh, thì phần đóng góp riêng của Trung Quốc là:\n\n**800 TWh**\n\n*(Nguồn: World Energy Outlook 2025, trang 194)*",
+      "hit_max_iterations": false,
+      "retrieved_chunks_count": 8,
+      "judge": {
+        "faithfulness": {
+          "score": 5,
+          "notes": "Mọi thông tin về tỷ lệ 40% của Trung Quốc trong giai đoạn đến 2035 theo kịch bản STEPS đều được trích xuất chính xác từ chunk World Energy Outlook 2025, trang 194."
+        },
+        "correctness": {
+          "score": 5,
+          "notes": "Câu trả lời tính ra kết quả 800 TWh, khớp chính xác với expected_answer_contains."
+        },
+        "citation_quality": {
+          "score": 1,
+          "notes": "Trích dẫn hoàn toàn sai nguồn và số trang so với gold_evidence (Energy Efficiency 2024, trang 104) và không có acceptable_alternative_evidence."
+        },
+        "completeness": {
+          "score": 5,
+          "notes": "Câu trả lời nêu rõ tỷ lệ cơ sở và kết quả tính toán đóng góp của Trung Quốc đầy đủ, trực tiếp và không lan man."
+        }
+      },
+      "agent_cost": 0.00974104,
+      "judge_cost": 0.01056075,
+      "agent_latency": 23.49968429998262,
+      "judge_latency": 17.20288990001427,
+      "deterministic": {
+        "id": "both_007",
+        "recall_5": false,
+        "recall_10": false,
+        "rank": null,
+        "citation_correct": false
+      }
+    }
+  ]
+}

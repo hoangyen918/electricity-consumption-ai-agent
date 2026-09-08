@@ -65,20 +65,21 @@ Trung bình theo category, tính từ **`evals/results/eval_detail_20260901_0112
 | Câu hỏi RAG (retrieve + trả lời) | $0.005637 (TB 14 case `kb_qa`, min $0.002755 – max $0.008183) |
 | Câu kết hợp data + knowledge | $0.011932 (TB 7 case `both`, min $0.006854 – max $0.028888) |
 
-## Chi phí đo được thực tế (số liệu chính thức, 29/08/2026)
+## Chi phí đo được thực tế (số liệu chính thức, 04/09/2026 — sau khi sửa 4 gold_evidence sai,
+xem `evals/gold_evidence_verification.log`; số liệu 29/08-01/09 trước đây đã lỗi thời)
 
 ### Bộ 53 câu eval — chạy đầy đủ
-- Tổng chi phí: **$0.310503**
-- Trung bình mỗi câu: **~$0.0059**
-- Latency trung bình: **21.4 giây/câu**
-- Accuracy: 96.2% (51/53)
+- Tổng chi phí: **$0.297755**
+- Trung bình mỗi câu: **~$0.0056**
+- Latency trung bình: **29.6 giây/câu**
+- Accuracy: 94.3% (50/53)
 
 ### Ingest toàn bộ Knowledge Base (một lần duy nhất, không lặp lại trừ khi thêm tài liệu mới)
 - 17 nguồn, 6,127 chunks, ~3.1 triệu token (embedding)
 - Chi phí: dưới $0.10 (embedding rẻ, $0.02/1M token)
 
 ### Ước tính 1 phiên demo (10 câu hỏi hỗn hợp)
-~$0.06 (10 × $0.0059 trung bình) ≈ **1.560 VND** (tỷ giá tham khảo 26.000 VND/USD)
+~$0.056 (10 × $0.0056 trung bình) ≈ **1.461 VND** (tỷ giá tham khảo 26.000 VND/USD)
 
 ## Đề xuất tối ưu chi phí
 

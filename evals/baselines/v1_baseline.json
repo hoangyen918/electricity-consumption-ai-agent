@@ -1,21 +1,21 @@
 {
-  "timestamp": "2026-09-02T08:23:27.902025+00:00",
+  "timestamp": "2026-09-04T03:10:53.270242+00:00",
   "total_cases": 53,
-  "passed": 49,
-  "overall_accuracy": 0.9245,
-  "accuracy": 0.9245,
+  "passed": 50,
+  "overall_accuracy": 0.9434,
+  "accuracy": 0.9434,
   "retrieval": {
-    "n_cases_with_gold_evidence": 19,
-    "recall_at_5": 0.8421,
-    "recall_at_10": 0.8421,
-    "mrr": 0.5912,
-    "citation_correctness_rate": 0.7368,
+    "n_cases_with_gold_evidence": 21,
+    "recall_at_5": 0.8571,
+    "recall_at_10": 0.8571,
+    "mrr": 0.6365,
+    "citation_correctness_rate": 0.9048,
     "per_case": [
       {
         "id": "kb_001",
         "recall_5": true,
         "recall_10": true,
-        "rank": 2,
+        "rank": 1,
         "citation_correct": true
       },
       {
@@ -29,7 +29,7 @@
         "id": "kb_003",
         "recall_5": true,
         "recall_10": true,
-        "rank": 1,
+        "rank": 2,
         "citation_correct": true
       },
       {
@@ -64,7 +64,21 @@
         "id": "kb_008",
         "recall_5": true,
         "recall_10": true,
+        "rank": 2,
+        "citation_correct": true
+      },
+      {
+        "id": "kb_009",
+        "recall_5": true,
+        "recall_10": true,
         "rank": 1,
+        "citation_correct": true
+      },
+      {
+        "id": "kb_010",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 3,
         "citation_correct": true
       },
       {
@@ -86,14 +100,14 @@
         "recall_5": true,
         "recall_10": true,
         "rank": 1,
-        "citation_correct": false
+        "citation_correct": true
       },
       {
         "id": "kb_014",
         "recall_5": true,
         "recall_10": true,
-        "rank": 2,
-        "citation_correct": false
+        "rank": 3,
+        "citation_correct": true
       },
       {
         "id": "both_001",
@@ -113,7 +127,7 @@
         "id": "both_003",
         "recall_5": true,
         "recall_10": true,
-        "rank": 5,
+        "rank": 2,
         "citation_correct": true
       },
       {
@@ -127,15 +141,15 @@
         "id": "both_005",
         "recall_5": true,
         "recall_10": true,
-        "rank": 2,
+        "rank": 1,
         "citation_correct": true
       },
       {
         "id": "both_006",
         "recall_5": true,
         "recall_10": true,
-        "rank": 3,
-        "citation_correct": false
+        "rank": 1,
+        "citation_correct": true
       },
       {
         "id": "both_007",
@@ -164,8 +178,8 @@
     },
     "kb_qa": {
       "total": 14,
-      "passed": 11,
-      "accuracy": 0.7857
+      "passed": 13,
+      "accuracy": 0.9286
     },
     "both": {
       "total": 7,
@@ -184,8 +198,8 @@
     },
     "parametric_override": {
       "total": 1,
-      "passed": 1,
-      "accuracy": 1.0
+      "passed": 0,
+      "accuracy": 0.0
     }
   },
   "categories": {
@@ -206,8 +220,8 @@
     },
     "kb_qa": {
       "total": 14,
-      "passed": 11,
-      "accuracy": 0.7857
+      "passed": 13,
+      "accuracy": 0.9286
     },
     "both": {
       "total": 7,
@@ -226,19 +240,19 @@
     },
     "parametric_override": {
       "total": 1,
-      "passed": 1,
-      "accuracy": 1.0
+      "passed": 0,
+      "accuracy": 0.0
     }
   },
-  "total_cost_usd": 0.29967,
-  "average_latency_ms": 44901.2,
+  "total_cost_usd": 0.297755,
+  "average_latency_ms": 29631.3,
   "notes": {
-    "network_affected_cases": [
-      "kb_009",
-      "kb_010"
-    ],
-    "known_retrieval_limitation": "kb_012 gold evidence at rank 11, outside top-10",
-    "known_agent_issue": "both_007 search-until-exhausted, intermittent",
-    "run_conditions": "network intermittently unstable, 2 cases lost to connection errors"
+    "gold_evidence_fix_2026-09-04": "4 gold_evidence sai (kb_013, kb_014, both_006, both_007) phát hiện qua LLM-as-a-Judge Phase 2, verify lại bằng đọc PDF thật, sửa về World Energy Outlook 2025 trang 194 (đúng nguồn chứa cả 2 số liệu '3%/năm' và 'Trung Quốc 40%'). Xem evals/gold_evidence_verification.log mục '=== SỬA GOLD EVIDENCE — 2026-09-04 ==='.",
+    "citation_correctness_before_fix": 0.7368,
+    "citation_correctness_after_fix": 0.9048,
+    "known_retrieval_limitation": "kb_012 gold evidence rank 11, ngoài top-10 mặc định (đã biết từ Phase 0, không liên quan gold_evidence fix)",
+    "known_agent_issue": "both_007 vẫn fail ở lần chạy này — KHÔNG do gold_evidence sai (đã sửa đúng), mà do agent (LLM non-deterministic) chọn nguồn khác 'World Energy Outlook 2024, trang 122' (45%) thay vì gold 'World Energy Outlook 2025, trang 194' (40%), dẫn tới tính sai kết quả. Đã biết trước là case không ổn định qua các lần chạy (search-until-exhausted / nguồn IEA mâu thuẫn số liệu giữa các ấn bản năm khác nhau).",
+    "known_agent_issue_parametric": "parametric_001 hit_max_iterations=True (5 lần gọi search_knowledge_base không dừng) — đã biết trước, không liên quan gold_evidence fix.",
+    "baseline_comparison": "So với baseline trước (2026-09-02, evals/baselines cũ trong git history): overall_accuracy 0.9245->0.9434, recall@5 0.8421->0.8571, recall@10 0.8421->0.8571, mrr 0.5912->0.6365, citation_correctness_rate 0.7368->0.9048. Threshold không đổi (0.90/0.80/0.55), vẫn PASS cả 3 mục."
   }
 }

@@ -141,3 +141,53 @@ hệ thống qua trace agent thật, sẽ phản ánh đúng tỷ lệ thành c�
 thật, không ép số liệu giả.
 1/21 case (kb_012) nằm ngay ngoài top-10 mặc định của hệ thống (rank=11) — cảnh báo có
 thể ảnh hưởng Recall@10 thật khi agent chạy với top_k=10 mặc định.
+
+=== SỬA GOLD EVIDENCE — 2026-09-04 (phát hiện qua LLM-as-a-Judge Phase 2) ===
+
+Bối cảnh: khi chạy Phase 2 LLM-as-a-Judge (evals/llm_judge.py, model google/gemini-3.8-flash,
+21 case), Judge liên tục ghi nhận agent trích dẫn "World Energy Outlook 2025, trang 194" cho
+4 câu hỏi cùng chủ đề "tăng trưởng nhu cầu điện toàn cầu" (kb_013, kb_014, both_006, both_007),
+trong khi gold_evidence hiện có của cả 4 case lại trỏ tới 3 nguồn/trang KHÁC NHAU (kb_013: WEO
+2025 p.174; kb_014 & both_007: Energy Efficiency 2024 p.104; both_006: WEO 2019 p.259). Sự
+nhất quán này (4 câu hỏi độc lập, agent không biết gold_evidence, đều hội tụ về đúng 1 trang)
+là tín hiệu mạnh cho thấy gold_evidence cũ sai, không phải agent trích sai.
+
+VERIFY LẠI BẰNG CÁCH ĐỌC TRỰC TIẾP PDF THẬT (PyMuPDF, không suy đoán):
+
+1. WorldEnergyOutlook2025.pdf, trang 174 (doc[173]) — gold CŨ của kb_013. Nội dung THẬT:
+   nói về GDP growth và TỔNG NHU CẦU NĂNG LƯỢNG (không phải điện): "Global gross domestic
+   product (GDP) is assumed to rise at around 3% a year to 2035... while total energy demand
+   growth halves from an annual average of 1.6% over the past decade to 0.7%...". Có chữ
+   "3%" (khớp answer_must_contain_any của kb_013) NHƯNG đó là GDP growth, không liên quan
+   nhu cầu điện — TRÙNG HỢP NEEDLE SAI NGỮ CẢNH, không phải câu trả lời đúng.
+
+2. WorldEnergyOutlook2025.pdf, trang 194 (doc[193]) — nội dung THẬT khớp CHÍNH XÁC cả 4 câu
+   hỏi: "The annual growth in electricity demand of close to 3% per year over the last
+   decade is nearly twice the rate of growth for total energy demand... China alone is
+   responsible for 40% of this growth [additional global electricity demand by 2035]..."
+   → đúng "3%" (kb_013, both_006) VÀ đúng "40%" (kb_014, both_007) trong ĐÚNG ngữ cảnh nhu
+   cầu điện, không phải GDP/năng lượng chung.
+
+3. EnergyEfficiency2024.pdf, trang 104 (doc[103]) — gold CŨ của kb_014/both_007. Nội dung
+   THẬT: Chương 4 (Regions) nói về hiệu suất năng lượng CÔNG NGHIỆP Trung Quốc (industrial
+   energy demand, peak load reduction 0.5 GW, electrification 27.6%...) — HOÀN TOÀN KHÔNG
+   liên quan tới tăng trưởng nhu cầu điện toàn cầu hay tỷ lệ đóng góp của Trung Quốc trong
+   mức tăng đó tới 2035. Xác nhận dứt điểm: gold cũ của kb_014/both_007 sai.
+
+4. WorldEnergyOutlook2019.pdf, trang 259 — gold CŨ của both_006. CHƯA đọc trực tiếp PDF này
+   (ngoài phạm vi task xác minh gần nhất) — suy luận từ pattern nhất quán (agent hội tụ về
+   WEO 2025 p.194 cho cùng câu hỏi gốc "tốc độ tăng trưởng nhu cầu điện toàn cầu 3%/năm
+   thập kỷ qua") + notes của Judge. Rủi ro còn lại: nếu WEO 2019 p.259 THẬT SỰ cũng chứa
+   "~3%/năm" hợp lệ (báo cáo cũ hơn, có thể trích dẫn số liệu giai đoạn trước) thì đây có
+   thể là case (C) — cả 2 nguồn cùng hợp lệ — chưa loại trừ hoàn toàn bằng đọc PDF thật.
+
+BÀI HỌC BỔ SUNG cho phương pháp verify gold_evidence (áp dụng cho lần verify sau): chỉ tìm
+needle (vd "3%") xuất hiện trong chunk là CHƯA ĐỦ — phải đọc NGỮ CẢNH xung quanh để xác nhận
+needle đó thực sự trả lời ĐÚNG câu hỏi, không phải trùng hợp số liệu thuộc chủ đề khác (ở đây:
+GDP growth vs electricity demand growth, cùng là "3%" nhưng khác hoàn toàn ý nghĩa). Lỗi này
+xảy ra ở đúng lần verify gốc (2026-09-02) khi dùng phương pháp "tìm needle trong top-K", không
+đọc kỹ ngữ cảnh — đã sửa: kb_013 (p.174→194), kb_014 (Energy Efficiency 2024 p.104→WEO 2025
+p.194, "Energy Efficiency 2024 p.104" bị loại khỏi acceptable_alternative_evidence vì xác nhận
+không liên quan), both_006 (WEO 2019 p.259→WEO 2025 p.194, CHƯA verify bằng đọc PDF), both_007
+(Energy Efficiency 2024 p.104→WEO 2025 p.194). Đã KHÔNG sửa gì trong rag/ — đây thuần là sửa
+dữ liệu test (cases.jsonl).

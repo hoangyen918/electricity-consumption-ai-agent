@@ -103,38 +103,43 @@ có formal Recall@5/Recall@10/MRR/Citation correctness dựa trên `gold_evidenc
 LLM-as-a-Judge cho chất lượng ngữ nghĩa câu trả lời — vẫn là hướng mở rộng V2 (đã tham khảo
 phương pháp từ dataquestio/tutorials/evaluating-llm-outputs, xem DATA_SOURCES.md).
 
-**Bộ 53 câu hỏi, 8 category — kết quả chính thức:**
+**Bộ 53 câu hỏi, 8 category — kết quả chính thức (đo 2026-09-04, sau khi sửa 4 gold_evidence
+sai — xem mục Retrieval quality bên dưới):**
 
 | Category | Kết quả |
 |---|---|
 | data_simple | 10/10 (100%) |
 | group_compare | 8/8 (100%) |
 | multi_step | 5/5 (100%) |
-| kb_qa | 14/14 (100%) |
+| kb_qa | 13/14 (92.9%) |
 | both | 6/7 (85.7%) |
 | error_handling | 5/5 (100%) |
 | prompt_injection | 3/3 (100%) |
 | parametric_override | 0/1 (0%) |
-| **Tổng** | **51/53 (96.2%)** |
+| **Tổng** | **50/53 (94.3%)** |
 
-Chi phí: $0.310503 cho 53 câu (~$0.0059/câu). Latency trung bình: 21.4s/câu.
-3 case fail còn lại đều đã điều tra rõ nguyên nhân (không phải bug), xem DATA_SOURCES.md.
+Chi phí: $0.297755 cho 53 câu (~$0.0056/câu). Latency trung bình: 29.6s/câu.
+3 case fail còn lại đều đã điều tra rõ nguyên nhân (không phải bug mới), xem DATA_SOURCES.md
+và field `notes` trong `evals/baselines/v1_baseline.json`.
 
-### Retrieval quality (Phase 0, đo 2026-09-02 — `evals/baselines/v1_baseline.json`)
+### Retrieval quality (đo 2026-09-04, sau khi sửa gold_evidence — `evals/baselines/v1_baseline.json`)
 
-Bảng trên là baseline gốc (01/09). Bảng dưới đây là lần chạy full eval **riêng** ngày 02/09 sau
-khi thêm `gold_evidence` + 4 metric retrieval formal vào `evals/run_evals.py` — accuracy khác
-với bảng trên (92.45% thay vì 96.2%) một phần do 2 câu (`kb_009`, `kb_010`) mất kết nối mạng
-thật giữa chừng (retry 3 lần đều fail), không phải regression logic — chi tiết đầy đủ trong
-`evals/gold_evidence_verification.log` và field `notes` của `v1_baseline.json`.
+Lần đo 02/09 (Phase 0 gốc) có 4/21 case `gold_evidence` **sai** — phát hiện qua LLM-as-a-Judge
+Phase 1/2 (đối chiếu chấm điểm với 4 metric deterministic), verify lại bằng đọc PDF thật:
+`kb_013`, `kb_014`, `both_006`, `both_007` đều bị gán sai nguồn/trang, đúng ra đều là *World
+Energy Outlook 2025, trang 194*. Chi tiết đầy đủ: `evals/gold_evidence_verification.log`.
 
-| Metric | Giá trị |
-|--------|---------|
-| Recall@5 | 84.2% |
-| Recall@10 | 84.2% |
-| MRR | 0.5912 |
-| Citation correctness | 73.7% |
-| Overall accuracy | 92.45% (49/53) |
+| Metric | 02/09 (gold sai) | 04/09 (đã sửa) | Thay đổi |
+|--------|---------|---------|---------|
+| Recall@5 | 84.2% | **85.7%** | +1.5pp |
+| Recall@10 | 84.2% | **85.7%** | +1.5pp |
+| MRR | 0.5912 | **0.6365** | +0.045 |
+| Citation correctness | 73.7% | **90.5%** | +16.8pp |
+| Overall accuracy | 92.45% (49/53) | **94.34% (50/53)** | +1.9pp |
+
+Citation correctness tăng mạnh nhất — đúng đúng kỳ vọng, vì 4 case trước bị chấm sai chỉ do
+gold_evidence sai, không phải do hệ thống trích dẫn kém. Threshold (`THRESHOLDS` trong
+`evals/run_evals.py`, giữ nguyên 0.90/0.80/0.55, không nới lỏng) vẫn PASS cả 3 mục ở cả 2 lần đo.
 
 Ghi chú: 2 câu (`kb_009`, `kb_010`) fail do lỗi mạng, không phải bug. 1 câu (`kb_012`) là giới
 hạn retrieval thật — gold evidence xếp hạng 11, ngoài top-10 mặc định của hệ thống (nhất quán

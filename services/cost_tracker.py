@@ -18,6 +18,12 @@ MODEL_PRICING = {
         "input_per_million": 0.02,
         "output_per_million": 0.0,
     },
+    # Verified qua GET /api/v1/models ngày 2026-09-03 (khác PRICING_LAST_VERIFIED ở
+    # trên) — dùng cho LLM-as-a-Judge (model khác agent chính), xem evals/llm_judge.py.
+    "google/gemini-3.8-flash": {
+        "input_per_million": 0.75,
+        "output_per_million": 3.75,
+    },
 }
 
 
