@@ -91,6 +91,72 @@ def _examples_from_mask(df: pd.DataFrame, mask: pd.Series, cols: list[str], n: i
     return examples
 
 
+def _physical_violation_masks(df: pd.DataFrame, site: str, power_col: str, wind_col: str) -> dict:
+    """
+    Tính TOÀN BỘ mask thô (pd.Series[bool], full index, KHÔNG rút gọn) cho từng rule áp
+    dụng được — dùng chung cho detect_physical_violations() (chỉ cần summary/examples)
+    và classify_turbine_status() (cần mask thật để gộp thành nhãn "Measurement Error").
+    Tách ra đây để KHÔNG viết lại rule logic ở 2 nơi (đúng yêu cầu Phase 3 chiều).
+
+    Trả về dict[rule_name] = {"mask": pd.Series[bool], **metadata} — chỉ chứa rule THỰC
+    SỰ áp dụng được cho site này (rule N/A không xuất hiện trong dict trả về, khác với
+    detect_physical_violations() vẫn liệt kê rule N/A với applicable=False).
+    """
+    masks = {}
+
+    positive_power = df.loc[df[power_col] > 0, power_col]
+    if len(positive_power) > 0:
+        rated_power = float(np.percentile(positive_power, 99.5))
+        neg_threshold = -NEGATIVE_POWER_RATED_FRACTION * rated_power
+        masks["negative_power_magnitude_aware"] = {
+            "mask": df[power_col] < neg_threshold,
+            "rated_power_estimate": round(rated_power, 4),
+            "threshold_used": round(neg_threshold, 4),
+        }
+
+    masks["power_below_cutin"] = {
+        "mask": (df[power_col] > 0) & (df[wind_col] < CUT_IN_SPEED_MS),
+        "cutin_speed_ms": CUT_IN_SPEED_MS,
+    }
+
+    masks["power_above_cutout"] = {
+        "mask": (df[power_col] > 0) & (df[wind_col] > CUT_OUT_SPEED_MS),
+        "cutout_speed_ms": CUT_OUT_SPEED_MS,
+    }
+
+    pitch_cols = ["GT1.Pitch.Angle1", "GT1.Pitch.Angle2", "GT1.Pitch.Angle3"]
+    if site == "site1" and all(c in df.columns for c in pitch_cols):
+        pitch_max = df[pitch_cols].max(axis=1)
+        pitch_min = df[pitch_cols].min(axis=1)
+        masks["pitch_mismatch"] = {
+            "mask": (pitch_max - pitch_min) > PITCH_MISMATCH_DEG,
+            "threshold_deg": PITCH_MISMATCH_DEG,
+        }
+
+    if site == "site2" and "WIND_SPEED_2" in df.columns:
+        denom = df["WIND_SPEED"].replace(0, np.nan)
+        pct_diff = (df["WIND_SPEED"] - df["WIND_SPEED_2"]).abs() / denom
+        masks["anemometer_mismatch"] = {
+            "mask": pct_diff.fillna(0) > ANEMOMETER_MISMATCH_PCT,
+            "threshold_pct": ANEMOMETER_MISMATCH_PCT,
+        }
+
+    temp_gearbox, temp_stator = "TEMPERATURE_GEARBOX_OIL", "TEMPERATURE_STATOR"
+    if site == "site2" and temp_gearbox in df.columns and temp_stator in df.columns:
+        masks["temperature_alarm"] = {
+            "mask": (df[temp_gearbox] > GEARBOX_OIL_ALARM_C) | (df[temp_stator] > STATOR_ALARM_C),
+            "gearbox_oil_threshold_c": GEARBOX_OIL_ALARM_C,
+            "stator_threshold_c": STATOR_ALARM_C,
+        }
+
+    return masks
+
+
+_PITCH_NA_REASON = "Chỉ áp dụng cho Site 1 (GT1), cần đủ 3 cột GT1.Pitch.Angle1/2/3."
+_ANEMOMETER_NA_REASON = "Chỉ áp dụng cho Site 2, cần cột WIND_SPEED_2."
+_TEMPERATURE_NA_REASON = "Chỉ áp dụng cho Site 2, cần cột TEMPERATURE_GEARBOX_OIL và TEMPERATURE_STATOR."
+
+
 def detect_physical_violations(manager: DatasetManager, dataset_name: str | None = None) -> dict:
     try:
         df = manager.get_dataframe(dataset_name)
@@ -107,95 +173,37 @@ def detect_physical_violations(manager: DatasetManager, dataset_name: str | None
 
         power_col, wind_col = _power_wind_columns(site)
         n = len(df)
+        raw_masks = _physical_violation_masks(df, site, power_col, wind_col)
         rules = {}
 
-        # Rule 1: power am - magnitude-aware, KHONG dung nguong tuyet doi "power < 0"
-        positive_power = df.loc[df[power_col] > 0, power_col]
-        if len(positive_power) == 0:
+        def _build_rule_entry(name, example_cols, na_reason=None):
+            if name not in raw_masks:
+                rules[name] = {"applicable": False, "reason": na_reason}
+                return
+            info = raw_masks[name]
+            mask = info["mask"]
+            entry = {k: v for k, v in info.items() if k != "mask"}
+            entry.update({
+                "applicable": True,
+                "count": int(mask.sum()),
+                "pct": round(100 * mask.sum() / n, 4),
+                "examples": _examples_from_mask(df, mask, example_cols),
+            })
+            rules[name] = entry
+
+        if "negative_power_magnitude_aware" not in raw_masks:
             rules["negative_power_magnitude_aware"] = {
                 "applicable": False,
                 "reason": f"Không có giá trị {power_col} dương nào để ước lượng rated power.",
             }
         else:
-            rated_power = float(np.percentile(positive_power, 99.5))
-            neg_threshold = -NEGATIVE_POWER_RATED_FRACTION * rated_power
-            mask = df[power_col] < neg_threshold
-            rules["negative_power_magnitude_aware"] = {
-                "applicable": True,
-                "rated_power_estimate": round(rated_power, 4),
-                "threshold_used": round(neg_threshold, 4),
-                "count": int(mask.sum()),
-                "pct": round(100 * mask.sum() / n, 4),
-                "examples": _examples_from_mask(df, mask, ["datetime", power_col, wind_col]),
-            }
+            _build_rule_entry("negative_power_magnitude_aware", ["datetime", power_col, wind_col])
 
-        # Rule 2: power duong khi gio duoi cut-in
-        mask = (df[power_col] > 0) & (df[wind_col] < CUT_IN_SPEED_MS)
-        rules["power_below_cutin"] = {
-            "applicable": True,
-            "cutin_speed_ms": CUT_IN_SPEED_MS,
-            "count": int(mask.sum()),
-            "pct": round(100 * mask.sum() / n, 4),
-            "examples": _examples_from_mask(df, mask, ["datetime", power_col, wind_col]),
-        }
-
-        # Rule 3: power duong khi gio tren cut-out
-        mask = (df[power_col] > 0) & (df[wind_col] > CUT_OUT_SPEED_MS)
-        rules["power_above_cutout"] = {
-            "applicable": True,
-            "cutout_speed_ms": CUT_OUT_SPEED_MS,
-            "count": int(mask.sum()),
-            "pct": round(100 * mask.sum() / n, 4),
-            "examples": _examples_from_mask(df, mask, ["datetime", power_col, wind_col]),
-        }
-
-        # Rule 4: pitch 3 luoi lech >5 do - GT1 only
-        pitch_cols = ["GT1.Pitch.Angle1", "GT1.Pitch.Angle2", "GT1.Pitch.Angle3"]
-        if site == "site1" and all(c in df.columns for c in pitch_cols):
-            pitch_max = df[pitch_cols].max(axis=1)
-            pitch_min = df[pitch_cols].min(axis=1)
-            mask = (pitch_max - pitch_min) > PITCH_MISMATCH_DEG
-            rules["pitch_mismatch"] = {
-                "applicable": True,
-                "threshold_deg": PITCH_MISMATCH_DEG,
-                "count": int(mask.sum()),
-                "pct": round(100 * mask.sum() / n, 4),
-                "examples": _examples_from_mask(df, mask, ["datetime"] + pitch_cols),
-            }
-        else:
-            rules["pitch_mismatch"] = {"applicable": False, "reason": "Chỉ áp dụng cho Site 1 (GT1), cần đủ 3 cột GT1.Pitch.Angle1/2/3."}
-
-        # Rule 5: 2 anemometer lech >20% - Site 2 only
-        if site == "site2" and "WIND_SPEED_2" in df.columns:
-            denom = df["WIND_SPEED"].replace(0, np.nan)
-            pct_diff = (df["WIND_SPEED"] - df["WIND_SPEED_2"]).abs() / denom
-            mask = pct_diff.fillna(0) > ANEMOMETER_MISMATCH_PCT
-            rules["anemometer_mismatch"] = {
-                "applicable": True,
-                "threshold_pct": ANEMOMETER_MISMATCH_PCT,
-                "count": int(mask.sum()),
-                "pct": round(100 * mask.sum() / n, 4),
-                "examples": _examples_from_mask(df, mask, ["datetime", "WIND_SPEED", "WIND_SPEED_2"]),
-            }
-        else:
-            rules["anemometer_mismatch"] = {"applicable": False, "reason": "Chỉ áp dụng cho Site 2, cần cột WIND_SPEED_2."}
-
-        # Rule 6: nhiet do vuot nguong - Site 2 only (khong tim thay threshold rieng trong
-        # tai lieu KPI da ingest khi kiem tra - dung lai 90/150 nhu audit thu cong)
-        temp_gearbox = "TEMPERATURE_GEARBOX_OIL"
-        temp_stator = "TEMPERATURE_STATOR"
-        if site == "site2" and temp_gearbox in df.columns and temp_stator in df.columns:
-            mask = (df[temp_gearbox] > GEARBOX_OIL_ALARM_C) | (df[temp_stator] > STATOR_ALARM_C)
-            rules["temperature_alarm"] = {
-                "applicable": True,
-                "gearbox_oil_threshold_c": GEARBOX_OIL_ALARM_C,
-                "stator_threshold_c": STATOR_ALARM_C,
-                "count": int(mask.sum()),
-                "pct": round(100 * mask.sum() / n, 4),
-                "examples": _examples_from_mask(df, mask, ["datetime", temp_gearbox, temp_stator]),
-            }
-        else:
-            rules["temperature_alarm"] = {"applicable": False, "reason": "Chỉ áp dụng cho Site 2, cần cột TEMPERATURE_GEARBOX_OIL và TEMPERATURE_STATOR."}
+        _build_rule_entry("power_below_cutin", ["datetime", power_col, wind_col])
+        _build_rule_entry("power_above_cutout", ["datetime", power_col, wind_col])
+        _build_rule_entry("pitch_mismatch", ["datetime", "GT1.Pitch.Angle1", "GT1.Pitch.Angle2", "GT1.Pitch.Angle3"], _PITCH_NA_REASON)
+        _build_rule_entry("anemometer_mismatch", ["datetime", "WIND_SPEED", "WIND_SPEED_2"], _ANEMOMETER_NA_REASON)
+        _build_rule_entry("temperature_alarm", ["datetime", "TEMPERATURE_GEARBOX_OIL", "TEMPERATURE_STATOR"], _TEMPERATURE_NA_REASON)
 
         return success({
             "site_detected": site,
@@ -631,6 +639,263 @@ def estimate_power_curve(
                 "not_near_curve_examples_sample": not_near_curve_examples,
                 "note": "Khong tra ve day du tung dong (dataset co the co hang tram nghin dong) — xem docstring.",
             },
+        })
+    except Exception as exc:
+        return failure(str(exc))
+
+
+# 8 nhan Meteodyn (PO024) — thu tu chinh la THU TU UU TIEN cua classify_turbine_status():
+# diem nao khop rule truoc thi dung, KHONG check tiep cac rule sau.
+CLASSIFICATION_LABELS = [
+    "Measurement Error", "Stop", "Curtailment", "Under Production",
+    "Over Production", "Partial Stop", "Partial Curtailment", "Normal",
+]
+
+
+def classify_turbine_status(
+    manager: DatasetManager,
+    power_column: str,
+    wind_speed_column: str,
+    power_curve: dict,
+    dataset_name: str | None = None,
+    setpoint_column: str | None = None,
+    stop_power_threshold_pct: float = 0.01,
+    partial_stop_power_threshold_pct: float = 0.05,
+    curtailment_tracking_tolerance_pct: float = 0.05,
+    partial_curtailment_tracking_tolerance_pct: float = 0.15,
+    curtailment_setpoint_below_curve_pct: float = 0.9,
+    deviation_std_threshold: float = 2.0,
+) -> dict:
+    """
+    Phân loại 8 nhãn Meteodyn cho từng dòng, dựa trên độ lệch so với power curve đã
+    ước lượng SẴN (power_curve = field "data" từ kết quả estimate_power_curve(), TÁI
+    DÙNG — hàm này KHÔNG tự gọi lại estimate_power_curve()).
+
+    THỨ TỰ ƯU TIÊN (điểm khớp rule nào trước thì dừng, không check rule sau) —
+    xem CLASSIFICATION_LABELS:
+    1. Measurement Error: tái dùng TOÀN BỘ mask thô từ _physical_violation_masks()
+       (cùng hàm nội bộ detect_physical_violations() dùng — KHÔNG viết lại rule logic).
+       Nếu dataset không nhận diện được site (GT1.*/ACTIVE_POWER+WIND_SPEED), bỏ qua
+       bước này (không có rule nào để tái dùng), không raise lỗi.
+    2. Stop: power < stop_power_threshold_pct × rated_power VÀ wind_speed > cut-in
+       (CUT_IN_SPEED_MS, cùng hằng số detect_physical_violations() dùng — không hardcode
+       2 nơi). rated_power = max(median_power) trong power_curve (bin cao nhất/gần rated).
+       ĐÃ VALIDATE (2026-09-08, xem docs/turbine_data_audit.md): nhãn "Stop" đo khái niệm
+       RỘNG "công suất gần 0 do wind>cut-in" — đối chiếu với GT1.Common.OpSt cho thấy đây
+       gộp cả OpSt=Service/Starting/Standstill/Stop (4 trạng thái vận hành khác nhau cùng
+       biểu hiện công suất gần 0, chỉ 7.88% khớp đúng OpSt∈{Stop,Standstill}). Rule hoạt
+       động ĐÚNG thiết kế — 100% điểm bị "lệch" (OpSt=Service/Starting) vẫn nằm trong đúng
+       ngưỡng power khi kiểm tra lại (|totW| ≤ 1%×rated ở mọi điểm) — đây là khác biệt độ
+       chi tiết taxonomy giữa rule và mã OpSt, KHÔNG phải bug.
+    3. Curtailment: CHỈ áp dụng nếu setpoint_column có giá trị (Site 1) — Site 2 KHÔNG
+       BAO GIỜ được gán nhãn này (thiếu tín hiệu setpoint đáng tin cậy để phân biệt với
+       Under Production thật). Điều kiện: |power-setpoint|/setpoint <
+       curtailment_tracking_tolerance_pct VÀ setpoint < median_power_bin ×
+       curtailment_setpoint_below_curve_pct.
+    4. Under Production: (power - median_power_bin) / std_power_bin <
+       -deviation_std_threshold. Bin không có std hợp lệ (std=None/0, vd bin rỗng hoặc
+       chỉ 1 điểm) → bỏ qua rule này cho dòng đó (không raise).
+    5. Over Production: ngược lại, > +deviation_std_threshold.
+    6. Partial Stop / Partial Curtailment: biến thể "nhẹ hơn" — ngưỡng LỎNG HƠN
+       (partial_stop_power_threshold_pct=0.05 thay vì 0.01; partial_curtailment_tracking_
+       tolerance_pct=0.15 thay vì 0.05). QUAN TRỌNG: đây là ngưỡng HEURISTIC tự chọn,
+       KHÔNG có nguồn chính thức xác nhận ranh giới chính xác Full vs Partial — cần domain
+       expert review sau. Do được check SAU Under/Over Production (rule 4-5) trong thứ tự
+       ưu tiên, phần lớn điểm "công suất rất thấp" đã bị rule 4 bắt trước (deviation âm sâu
+       so với bin) — Partial Stop/Partial Curtailment trong thực tế có thể hiếm khi kích
+       hoạt; đây là hệ quả TRỰC TIẾP của thứ tự ưu tiên đã chỉ định, không phải bug.
+       ĐÃ VALIDATE (2026-09-08, xem docs/turbine_data_audit.md): ngưỡng Partial Stop hiện
+       tại (power < 5%×rated, TUYỆT ĐỐI — KHÔNG dùng cơ chế deviation-from-curve như
+       Under/Over Production) cho agreement RẤT THẤP với OpSt — chỉ 0.25% điểm khớp
+       OpSt∈{Stop,Standstill}, trong khi 92.98% lại rơi vào OpSt=Power Production. Đã thử
+       áp persistence rule (group_anomaly_windows(), min_consecutive_points=3): loại được
+       39.63% điểm (nhiễu ngắn hạn <3 điểm liên tiếp), nhưng ở các window CÒN LẠI agreement
+       KHÔNG cải thiện — thậm chí tệ hơn (94.60% Power Production, chỉ 0.06% Stop/
+       Standstill). Kết luận: rule đang bắt các đợt sụt công suất tạm thời trong vận hành
+       BÌNH THƯỜNG (gió yếu dần), không phải hiện tượng bán-dừng thật — persistence rule
+       không sửa được vấn đề này. CẦN domain expert review định nghĩa ngưỡng trước khi
+       dùng nhãn này cho quyết định vận hành thật.
+    7. Normal: còn lại. Dòng rơi vào bin KHÔNG có dữ liệu trong power_curve (median=None,
+       vd wind speed hiếm/ngoài phạm vi ước lượng ban đầu) mặc định về Normal nếu không
+       khớp rule nào khác — giới hạn đã biết, không có nhãn "Unknown" riêng theo đúng 8
+       nhãn Meteodyn yêu cầu.
+
+    Trả về: {"classification": {row_index: label}, "summary": {label: {count, pct}}}.
+    LƯU Ý: classification là dict ĐẦY ĐỦ TỪNG DÒNG (không rút gọn/sample) vì
+    group_anomaly_windows() cần dữ liệu đầy đủ để gộp cửa sổ thời gian — khác với các
+    tool khác trong module này (vd estimate_power_curve) chỉ trả summary+sample. Với
+    dataset lớn (~260.000 dòng), dict này có thể vài MB trong bộ nhớ Python — chấp nhận
+    được vì được tiêu thụ trực tiếp trong process (group_anomaly_windows), không phải để
+    hiển thị nguyên văn cho agent/LLM.
+    """
+    try:
+        df = manager.get_dataframe(dataset_name)
+        if df is None:
+            return failure(_dataset_not_found(manager, dataset_name))
+
+        for col in (power_column, wind_speed_column):
+            col_error = _validate_column(manager, col, dataset_name)
+            if col_error:
+                return failure(col_error)
+        if setpoint_column is not None:
+            col_error = _validate_column(manager, setpoint_column, dataset_name)
+            if col_error:
+                return failure(col_error)
+
+        power_curve_list = power_curve.get("power_curve")
+        bin_width = power_curve.get("bin_width")
+        if not power_curve_list or not bin_width:
+            return failure(
+                "power_curve không hợp lệ — cần truyền field 'data' từ kết quả "
+                "estimate_power_curve() (có 'power_curve' và 'bin_width'), không phải "
+                "toàn bộ dict {'ok':..,'data':..}."
+            )
+
+        median_lookup = pd.Series({b["wind_speed_bin_center"]: b["median_power"] for b in power_curve_list})
+        std_lookup = pd.Series({b["wind_speed_bin_center"]: b["std_power"] for b in power_curve_list})
+        positive_medians = median_lookup.dropna()
+        positive_medians = positive_medians[positive_medians > 0]
+        if len(positive_medians) == 0:
+            return failure("power_curve không có bin nào có median_power hợp lệ để ước lượng rated power.")
+        rated_power = float(positive_medians.max())
+
+        n = len(df)
+        power = df[power_column]
+        wind = df[wind_speed_column]
+        bin_centers = np.round(np.floor(wind / bin_width) * bin_width + bin_width / 2, 6)
+        median_series = pd.Series(median_lookup.reindex(bin_centers.values).values, index=df.index)
+        std_series = pd.Series(std_lookup.reindex(bin_centers.values).values, index=df.index)
+
+        site = _detect_site(df)
+        measurement_error_mask = pd.Series(False, index=df.index)
+        if site is not None:
+            raw_masks = _physical_violation_masks(df, site, power_column, wind_speed_column)
+            for info in raw_masks.values():
+                measurement_error_mask = measurement_error_mask | info["mask"]
+
+        labels = pd.Series("Normal", index=df.index, dtype=object)
+        assigned = pd.Series(False, index=df.index)
+
+        m = measurement_error_mask & ~assigned
+        labels[m] = "Measurement Error"
+        assigned = assigned | m
+
+        m = (~assigned) & (power < stop_power_threshold_pct * rated_power) & (wind > CUT_IN_SPEED_MS)
+        labels[m] = "Stop"
+        assigned = assigned | m
+
+        if setpoint_column is not None:
+            setpoint = df[setpoint_column]
+            valid_setpoint = setpoint.notna() & (setpoint != 0) & median_series.notna()
+            tracks_setpoint_tight = ((power - setpoint).abs() / setpoint.abs()) < curtailment_tracking_tolerance_pct
+            setpoint_below_curve = setpoint < (median_series * curtailment_setpoint_below_curve_pct)
+
+            m = (~assigned) & valid_setpoint & tracks_setpoint_tight.fillna(False) & setpoint_below_curve.fillna(False)
+            labels[m] = "Curtailment"
+            assigned = assigned | m
+
+        valid_std = std_series.notna() & (std_series > 0) & median_series.notna()
+        deviation_z = (power - median_series) / std_series
+
+        m = (~assigned) & valid_std & (deviation_z < -deviation_std_threshold)
+        labels[m] = "Under Production"
+        assigned = assigned | m
+
+        m = (~assigned) & valid_std & (deviation_z > deviation_std_threshold)
+        labels[m] = "Over Production"
+        assigned = assigned | m
+
+        m = (~assigned) & (power < partial_stop_power_threshold_pct * rated_power) & (wind > CUT_IN_SPEED_MS)
+        labels[m] = "Partial Stop"
+        assigned = assigned | m
+
+        if setpoint_column is not None:
+            tracks_setpoint_loose = ((power - setpoint).abs() / setpoint.abs()) < partial_curtailment_tracking_tolerance_pct
+            m = (~assigned) & valid_setpoint & tracks_setpoint_loose.fillna(False) & setpoint_below_curve.fillna(False)
+            labels[m] = "Partial Curtailment"
+            assigned = assigned | m
+
+        # con lai giu nguyen "Normal" (khoi tao ban dau)
+
+        counts = labels.value_counts()
+        summary = {lbl: {"count": int(cnt), "pct": round(100 * cnt / n, 4)} for lbl, cnt in counts.items()}
+
+        return success({
+            "site_detected": site,
+            "rated_power_estimate": round(rated_power, 4),
+            "curtailment_applicable": setpoint_column is not None,
+            "classification": {int(idx): lbl for idx, lbl in labels.items()},
+            "summary": summary,
+        })
+    except Exception as exc:
+        return failure(str(exc))
+
+
+def group_anomaly_windows(
+    manager: DatasetManager,
+    classification: dict,
+    timestamp_column: str,
+    dataset_name: str | None = None,
+    min_consecutive_points: int = 3,
+    exclude_labels: list[str] | None = None,
+) -> dict:
+    """
+    Gộp các điểm LIÊN TIẾP THEO THỜI GIAN cùng nhãn (từ classify_turbine_status(),
+    không tính lại) thành 1 khoảng thời gian. Tự sắp xếp lại theo timestamp_column
+    (không giả định dataset đã sort sẵn). Chỉ giữ khoảng có >= min_consecutive_points.
+
+    exclude_labels mặc định ["Normal"] nếu để None (KHÔNG dùng default argument dạng
+    list trực tiếp trong signature — tránh lỗi mutable default argument kinh điển của
+    Python).
+    """
+    try:
+        df = manager.get_dataframe(dataset_name)
+        if df is None:
+            return failure(_dataset_not_found(manager, dataset_name))
+        col_error = _validate_column(manager, timestamp_column, dataset_name)
+        if col_error:
+            return failure(col_error)
+
+        exclude_labels = exclude_labels if exclude_labels is not None else ["Normal"]
+
+        labels_series = pd.Series(classification)
+        labels_series.index = labels_series.index.astype(df.index.dtype) if len(labels_series) else labels_series.index
+        ordered_index = df[timestamp_column].sort_values().index
+        ordered_index = [i for i in ordered_index if i in labels_series.index]
+        if not ordered_index:
+            return failure("Không có row_index nào trong classification khớp với dataset (kiểm tra lại classification có đúng lấy từ classify_turbine_status() trên CÙNG dataset_name này không).")
+
+        windows = []
+        current_label = None
+        run_indices = []
+
+        def _flush():
+            if current_label is not None and current_label not in exclude_labels and len(run_indices) >= min_consecutive_points:
+                start_time = df[timestamp_column].loc[run_indices[0]]
+                end_time = df[timestamp_column].loc[run_indices[-1]]
+                windows.append({
+                    "label": current_label,
+                    "start_time": str(start_time),
+                    "end_time": str(end_time),
+                    "duration": str(end_time - start_time),
+                    "n_points": len(run_indices),
+                })
+
+        for idx in ordered_index:
+            lbl = labels_series.loc[idx]
+            if lbl == current_label:
+                run_indices.append(idx)
+            else:
+                _flush()
+                current_label = lbl
+                run_indices = [idx]
+        _flush()
+
+        return success({
+            "windows": windows,
+            "total_windows": len(windows),
+            "min_consecutive_points": min_consecutive_points,
+            "exclude_labels": exclude_labels,
         })
     except Exception as exc:
         return failure(str(exc))

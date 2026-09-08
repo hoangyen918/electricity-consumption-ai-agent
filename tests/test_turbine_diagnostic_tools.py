@@ -9,6 +9,8 @@ from tools.turbine_diagnostic_tools import (
     diagnose_theoretical_power_deviation,
     explain_anomaly,
     estimate_power_curve,
+    classify_turbine_status,
+    group_anomaly_windows,
 )
 
 GT1_PATH_REAL = "data/wind_turbine/data1/his_data_GT1.csv"
@@ -419,3 +421,259 @@ def test_integration_estimate_power_curve_on_real_wt1_shows_rising_then_saturati
     mid = [b for b in curve if 8 <= b["wind_speed_bin_center"] <= 10]
     assert low and mid
     assert max(b["median_power"] for b in low) < min(b["median_power"] for b in mid)
+
+
+# =============================== classify_turbine_status ===============================
+
+def _fake_power_curve(bins: list[dict], bin_width: float = 1.0) -> dict:
+    """power_curve gia (dung format field 'data' cua estimate_power_curve()) — moi bin la
+    dict {'wind_speed_bin_center','median_power','std_power'}. n_points_used/total khong
+    can thiet cho classify_turbine_status() nen bo qua trong fixture test."""
+    return {"bin_width": bin_width, "power_curve": bins}
+
+
+def _site2_manager(tmp_path, rows: list[str], header: str = "DATE_TIME,ACTIVE_POWER,WIND_SPEED") -> DatasetManager:
+    csv_path = tmp_path / "site2_fixture.csv"
+    csv_path.write_text(header + "\n" + "\n".join(rows) + "\n", encoding="utf-8")
+    m = DatasetManager()
+    m.load_csv(str(csv_path))
+    return m
+
+
+def test_classify_turbine_status_stop_label(tmp_path):
+    m = _site2_manager(tmp_path, ["01/01/2024 00:00,1.0,5.5"])
+    curve = _fake_power_curve([{"wind_speed_bin_center": 5.5, "median_power": 500.0, "std_power": 50.0}])
+    result = classify_turbine_status(m, power_column="ACTIVE_POWER", wind_speed_column="WIND_SPEED", power_curve=curve)
+    assert result["ok"] is True
+    assert result["data"]["classification"][0] == "Stop"
+
+
+def test_classify_turbine_status_under_over_and_normal_labels(tmp_path):
+    rows = [
+        "01/01/2024 00:00,350.0,5.5",   # dev = -3 std -> Under Production
+        "01/01/2024 00:10,650.0,5.5",   # dev = +3 std -> Over Production
+        "01/01/2024 00:20,550.0,5.5",   # dev = +1 std -> Normal
+    ]
+    m = _site2_manager(tmp_path, rows)
+    curve = _fake_power_curve([{"wind_speed_bin_center": 5.5, "median_power": 500.0, "std_power": 50.0}])
+    result = classify_turbine_status(m, power_column="ACTIVE_POWER", wind_speed_column="WIND_SPEED", power_curve=curve)
+    assert result["ok"] is True
+    c = result["data"]["classification"]
+    assert c[0] == "Under Production"
+    assert c[1] == "Over Production"
+    assert c[2] == "Normal"
+
+
+def test_classify_turbine_status_partial_stop_label_not_caught_by_under_production(tmp_path):
+    """Bin gio thap (ws=3.5, gan cut-in) co median/std NHO — 1 diem power=15 gan bang
+    median cua CHINH BIN DO (khong lech >2std) nhung van rat thap so voi rated_power
+    TOAN CUC (tu bin cao nhat, median=500) -> phai la Partial Stop (15 < 5%*500=25),
+    KHONG phai Under Production (vi dev so voi bin rieng no chi -0.5 std)."""
+    rows = [
+        "01/01/2024 00:00,15.0,3.5",   # bin 3.5: median=20,std=10 -> dev=-0.5 (khong Under)
+        "01/01/2024 00:10,500.0,15.5",  # bin cao cung cap rated_power=500 (khong dung de test truc tiep)
+    ]
+    m = _site2_manager(tmp_path, rows)
+    curve = _fake_power_curve([
+        {"wind_speed_bin_center": 3.5, "median_power": 20.0, "std_power": 10.0},
+        {"wind_speed_bin_center": 15.5, "median_power": 500.0, "std_power": 50.0},
+    ])
+    result = classify_turbine_status(m, power_column="ACTIVE_POWER", wind_speed_column="WIND_SPEED", power_curve=curve)
+    assert result["ok"] is True
+    assert result["data"]["rated_power_estimate"] == pytest.approx(500.0)
+    assert result["data"]["classification"][0] == "Partial Stop"
+
+
+def _site1_manager_with_setpoint(tmp_path, rows: list[str]) -> DatasetManager:
+    header = "TimeStamp,GT1.Grid.totW,GT1.Common.WindSpd,GT1.SP.ActualSPP"
+    csv_path = tmp_path / "site1_setpoint_fixture.csv"
+    csv_path.write_text(header + "\n" + "\n".join(rows) + "\n", encoding="utf-8")
+    m = DatasetManager()
+    m.load_csv(str(csv_path))
+    return m
+
+
+def test_classify_turbine_status_curtailment_label_site1_only(tmp_path):
+    # setpoint=850 (< median*0.9=900 -> setpoint bi dat thap); power=867 bam sat setpoint
+    # (|867-850|/850=0.02 < 0.05 tight tolerance)
+    m = _site1_manager_with_setpoint(tmp_path, ["2024-01-01 00:00:00,867.0,8.5,850.0"])
+    curve = _fake_power_curve([{"wind_speed_bin_center": 8.5, "median_power": 1000.0, "std_power": 100.0}])
+    result = classify_turbine_status(
+        m, power_column="GT1.Grid.totW", wind_speed_column="GT1.Common.WindSpd",
+        power_curve=curve, setpoint_column="GT1.SP.ActualSPP",
+    )
+    assert result["ok"] is True
+    assert result["data"]["curtailment_applicable"] is True
+    assert result["data"]["classification"][0] == "Curtailment"
+
+
+def test_classify_turbine_status_partial_curtailment_label(tmp_path):
+    # setpoint=850 (below curve); power=935 -> |935-850|/850=0.10 (fail tight 0.05,
+    # pass loose 0.15); dev tu bin median (1000,std=100): (935-1000)/100=-0.65 (khong
+    # Under Production); power(935) khong < 5%*rated(1000)=50 -> khong Partial Stop
+    m = _site1_manager_with_setpoint(tmp_path, ["2024-01-01 00:00:00,935.0,8.5,850.0"])
+    curve = _fake_power_curve([{"wind_speed_bin_center": 8.5, "median_power": 1000.0, "std_power": 100.0}])
+    result = classify_turbine_status(
+        m, power_column="GT1.Grid.totW", wind_speed_column="GT1.Common.WindSpd",
+        power_curve=curve, setpoint_column="GT1.SP.ActualSPP",
+    )
+    assert result["ok"] is True
+    assert result["data"]["classification"][0] == "Partial Curtailment"
+
+
+def test_classify_turbine_status_measurement_error_takes_priority_over_stop(tmp_path):
+    """Diem co WIND_SPEED vs WIND_SPEED_2 lech >20% (anemometer_mismatch, Site 2) VA
+    dong thoi power rat thap (du dieu kien Stop) -> phai la Measurement Error (uu tien
+    1) chu KHONG phai Stop (uu tien 2), vi Measurement Error duoc check truoc."""
+    header = "DATE_TIME,ACTIVE_POWER,WIND_SPEED,WIND_SPEED_2"
+    rows = ["01/01/2024 00:00,1.0,10.0,7.0"]  # |10-7|/10=0.30 > 0.20 -> anemometer_mismatch
+    m = _site2_manager(tmp_path, rows, header=header)
+    curve = _fake_power_curve([{"wind_speed_bin_center": 10.5, "median_power": 800.0, "std_power": 80.0}])
+    result = classify_turbine_status(m, power_column="ACTIVE_POWER", wind_speed_column="WIND_SPEED", power_curve=curve)
+    assert result["ok"] is True
+    assert result["data"]["classification"][0] == "Measurement Error"
+
+
+def test_classify_turbine_status_site2_without_setpoint_never_assigns_curtailment(tmp_path):
+    rows = ["01/01/2024 00:00,500.0,5.5", "01/01/2024 00:10,10.0,3.5"]
+    m = _site2_manager(tmp_path, rows)
+    curve = _fake_power_curve([
+        {"wind_speed_bin_center": 5.5, "median_power": 500.0, "std_power": 50.0},
+        {"wind_speed_bin_center": 3.5, "median_power": 20.0, "std_power": 10.0},
+    ])
+    result = classify_turbine_status(m, power_column="ACTIVE_POWER", wind_speed_column="WIND_SPEED", power_curve=curve)
+    assert result["ok"] is True
+    assert result["data"]["curtailment_applicable"] is False
+    assert "Curtailment" not in result["data"]["summary"]
+    assert "Partial Curtailment" not in result["data"]["summary"]
+    assert set(result["data"]["classification"].values()) & {"Curtailment", "Partial Curtailment"} == set()
+
+
+def test_classify_turbine_status_invalid_power_curve_fails_gracefully(tmp_path):
+    m = _site2_manager(tmp_path, ["01/01/2024 00:00,500.0,5.5"])
+    result = classify_turbine_status(m, power_column="ACTIVE_POWER", wind_speed_column="WIND_SPEED", power_curve={})
+    assert result["ok"] is False
+
+
+def test_integration_classify_turbine_status_on_real_gt1_normal_is_majority():
+    m = DatasetManager()
+    m.load_csv(GT1_PATH_REAL, name="GT1")
+    curve_result = estimate_power_curve(m, power_column="GT1.Grid.totW", wind_speed_column="GT1.Common.WindSpd", dataset_name="GT1", bin_width=1.0)
+    assert curve_result["ok"] is True
+
+    result = classify_turbine_status(
+        m, power_column="GT1.Grid.totW", wind_speed_column="GT1.Common.WindSpd",
+        power_curve=curve_result["data"], dataset_name="GT1", setpoint_column="GT1.SP.ActualSPP",
+    )
+    assert result["ok"] is True
+    assert len(result["data"]["classification"]) == 233953
+    summary = result["data"]["summary"]
+    assert summary["Normal"]["count"] == max(v["count"] for v in summary.values())
+    assert summary["Normal"]["pct"] > 50  # Normal phai chiem da so
+
+
+def test_integration_classify_turbine_status_on_real_wt1_site2_no_curtailment():
+    m = DatasetManager()
+    m.load_csv(WT1_PATH_REAL, name="WT1")
+    curve_result = estimate_power_curve(m, power_column="ACTIVE_POWER", wind_speed_column="WIND_SPEED", dataset_name="WT1", bin_width=1.0)
+    assert curve_result["ok"] is True
+
+    result = classify_turbine_status(
+        m, power_column="ACTIVE_POWER", wind_speed_column="WIND_SPEED",
+        power_curve=curve_result["data"], dataset_name="WT1",
+    )
+    assert result["ok"] is True
+    assert result["data"]["curtailment_applicable"] is False
+    assert "Curtailment" not in result["data"]["summary"]
+    summary = result["data"]["summary"]
+    assert summary["Normal"]["pct"] > 50
+
+
+# =============================== group_anomaly_windows ===============================
+
+def _timestamp_manager(tmp_path, n_rows: int, minutes_step: int = 10) -> DatasetManager:
+    base = pd.Timestamp("2024-01-01")
+    rows = ["ts,dummy"]
+    for i in range(n_rows):
+        ts = base + pd.Timedelta(minutes=minutes_step * i)
+        rows.append(f"{ts.isoformat()},{i}")
+    csv_path = tmp_path / "ts_fixture.csv"
+    csv_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    m = DatasetManager()
+    m.load_csv(str(csv_path))
+    return m
+
+
+def test_group_anomaly_windows_filters_by_min_consecutive_points(tmp_path):
+    # dung dung vi du trong task: Normal, Stop x5, Normal, Under Production x2, Normal
+    labels = ["Normal", "Stop", "Stop", "Stop", "Stop", "Stop", "Normal", "Under Production", "Under Production", "Normal"]
+    m = _timestamp_manager(tmp_path, n_rows=len(labels))
+    classification = {i: lbl for i, lbl in enumerate(labels)}
+
+    result = group_anomaly_windows(m, classification=classification, timestamp_column="datetime", min_consecutive_points=3)
+    assert result["ok"] is True
+    windows = result["data"]["windows"]
+    assert len(windows) == 1
+    assert windows[0]["label"] == "Stop"
+    assert windows[0]["n_points"] == 5
+
+
+def test_group_anomaly_windows_respects_custom_exclude_labels(tmp_path):
+    labels = ["Stop", "Stop", "Stop"]
+    m = _timestamp_manager(tmp_path, n_rows=3)
+    classification = {i: lbl for i, lbl in enumerate(labels)}
+
+    result = group_anomaly_windows(m, classification=classification, timestamp_column="datetime", min_consecutive_points=3, exclude_labels=["Stop"])
+    assert result["ok"] is True
+    assert result["data"]["windows"] == []
+
+
+def test_group_anomaly_windows_sorts_by_timestamp_before_grouping(tmp_path):
+    """classification dict co the KHONG theo thu tu thoi gian trong index goc — ham phai
+    tu sap xep lai theo timestamp_column truoc khi gop cua so, khong dua vao thu tu dict."""
+    base = pd.Timestamp("2024-01-01")
+    rows = ["ts,dummy"]
+    # dao nguoc thu tu ghi vao CSV so voi thoi gian that (dong dau la muon nhat)
+    order = [4, 3, 2, 1, 0]
+    for i in order:
+        ts = base + pd.Timedelta(minutes=10 * i)
+        rows.append(f"{ts.isoformat()},{i}")
+    csv_path = tmp_path / "unsorted_fixture.csv"
+    csv_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    m = DatasetManager()
+    m.load_csv(str(csv_path))
+
+    # row_index 0 (dong dau file, ts=2024-01-01 00:40) la "Stop"... nhung ve THOI GIAN
+    # thuc su no la diem CUOI cung. Gan nhan theo dung 5 vi tri thoi gian tang dan:
+    # t=0:00->Stop, 0:10->Stop, 0:20->Stop, 0:30->Normal, 0:40->Normal
+    # row_index trong df: dong 0 = i=4 (t=0:40) = Normal; dong1=i=3(t=0:30)=Normal;
+    # dong2=i=2(t=0:20)=Stop; dong3=i=1(t=0:10)=Stop; dong4=i=0(t=0:00)=Stop
+    classification = {0: "Normal", 1: "Normal", 2: "Stop", 3: "Stop", 4: "Stop"}
+
+    result = group_anomaly_windows(m, classification=classification, timestamp_column="datetime", min_consecutive_points=3)
+    assert result["ok"] is True
+    windows = result["data"]["windows"]
+    assert len(windows) == 1
+    assert windows[0]["label"] == "Stop"
+    assert windows[0]["n_points"] == 3
+    assert windows[0]["start_time"] == "2024-01-01 00:00:00"
+    assert windows[0]["end_time"] == "2024-01-01 00:20:00"
+
+
+def test_integration_group_anomaly_windows_on_real_gt1_without_crash():
+    m = DatasetManager()
+    m.load_csv(GT1_PATH_REAL, name="GT1")
+    curve_result = estimate_power_curve(m, power_column="GT1.Grid.totW", wind_speed_column="GT1.Common.WindSpd", dataset_name="GT1", bin_width=1.0)
+    classify_result = classify_turbine_status(
+        m, power_column="GT1.Grid.totW", wind_speed_column="GT1.Common.WindSpd",
+        power_curve=curve_result["data"], dataset_name="GT1", setpoint_column="GT1.SP.ActualSPP",
+    )
+    result = group_anomaly_windows(
+        m, classification=classify_result["data"]["classification"],
+        timestamp_column="datetime", dataset_name="GT1", min_consecutive_points=3,
+    )
+    assert result["ok"] is True
+    assert result["data"]["total_windows"] > 0
+    for w in result["data"]["windows"][:20]:
+        assert w["n_points"] >= 3
+        assert w["label"] != "Normal"

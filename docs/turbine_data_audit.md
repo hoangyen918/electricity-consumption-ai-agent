@@ -286,3 +286,22 @@ Standstill/Starting là các trạng thái chuyển tiếp thường xuyên hơn
    `note.txt`. Đây là lỗi trình bày thủ công khi đó, KHÔNG phải lỗi tính toán của
    `diagnose_theoretical_power_deviation()` — JSON gốc tool trả về lúc đó đã có đúng
    giá trị này.
+
+## Giới hạn đã biết — Classification (`classify_turbine_status()`, Phase 3 chiều)
+
+Validate bằng đối chiếu OpSt (GT1, không dùng làm input, chỉ kiểm chứng sau) phát hiện
+2 giới hạn thật, đã điều tra kỹ (xem docstring `classify_turbine_status()` để biết đầy
+đủ số liệu) — **không sửa threshold**, chỉ ghi nhận:
+
+- **Nhãn "Stop"** — khác biệt độ chi tiết taxonomy, KHÔNG phải bug: rule đo khái niệm
+  rộng "công suất gần 0 khi wind>cut-in", gộp cả OpSt=Service/Starting/Standstill/Stop
+  (chỉ 7.88% khớp đúng OpSt∈{Stop,Standstill}). Verify: 100% điểm "lệch" vẫn nằm đúng
+  trong ngưỡng power của rule khi kiểm tra lại — rule hoạt động đúng thiết kế.
+- **Nhãn "Partial Stop"** — giới hạn thật của ngưỡng heuristic: chỉ 0.25% khớp
+  OpSt∈{Stop,Standstill} (92.98% lại là Power Production). Áp persistence rule
+  (`group_anomaly_windows()`, min_consecutive_points=3) loại được 39.63% điểm nhiễu
+  ngắn hạn, nhưng KHÔNG cải thiện agreement ở phần còn lại (94.60% Power Production,
+  0.06% Stop/Standstill — còn tệ hơn trước). Rule hiện đang bắt các đợt sụt công suất
+  tạm thời trong vận hành bình thường (gió yếu dần), không phải hiện tượng bán-dừng
+  thật — **cần domain expert review định nghĩa ngưỡng trước khi dùng nhãn này cho
+  quyết định vận hành thật**.
