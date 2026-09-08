@@ -13,3 +13,4 @@ pytest
 requests
 ucimlrepo
 rank-bm25
+plotly

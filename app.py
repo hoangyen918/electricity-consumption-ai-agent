@@ -5,9 +5,12 @@ import tempfile
 from pathlib import Path
 
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 
 from tools.dataset_manager import DatasetManager
+from tools.data_cleaning_tools import clean_missing_values, detect_duplicates
+from tools.turbine_diagnostic_tools import diagnose_theoretical_power_deviation
 from agent.agent import Agent
 from config.settings import SETTINGS
 from rag.vector_store import count_documents
@@ -20,6 +23,19 @@ DEFAULT_DATASET_PATH = "data/processed/tetouan_clean.csv"
 BASELINE_PATH = Path("evals/baselines/v1_baseline.json")
 CASES_PATH = Path("evals/cases.jsonl")
 MARGIN_WARNING_THRESHOLD = 0.1  # cảnh báo nếu distance cách SCORE_THRESHOLD dưới 0.1
+
+# 5 file turbine gió Phase 1 — KHÔNG git-track (xem .gitignore), chỉ tồn tại nếu người
+# dùng đã tự copy vào máy. Dashboard phải tự phát hiện thiếu file, không giả định có sẵn.
+WIND_TURBINE_DATASET_PATHS = {
+    "his_data_GT1": "data/wind_turbine/data1/his_data_GT1.csv",
+    "WindFarm04_WT1": "data/wind_turbine/data2/WindFarm04_WT1.csv",
+    "WindFarm04_WT2": "data/wind_turbine/data2/WindFarm04_WT2.csv",
+    "WindFarm04_WT3": "data/wind_turbine/data2/WindFarm04_WT3.csv",
+    "WindFarm04_WT4": "data/wind_turbine/data2/WindFarm04_WT4.csv",
+}
+# Nguồn: tercile WindSpd đo được trong investigation Phase 2 (không tính lại ở đây,
+# xem báo cáo "Phân tích deviation trên nhóm vi phạm" — corr(deviation, WindSpd)=-0.29).
+GT1_DEVIATION_TERCILE_WINDSPD = {"Thấp (~4.0 m/s)": 23.77, "Vừa (~6.2 m/s)": 17.74, "Cao (~8.6 m/s)": 15.12}
 
 
 def load_eval_baseline() -> dict | None:
@@ -430,6 +446,126 @@ def render_trace_expander(trace_info: dict):
                        "— có thể agent diễn giải quá xa nội dung gốc, nên tự kiểm tra lại.")
 
 
+def _get_wind_turbine_manager() -> DatasetManager:
+    """DatasetManager RIÊNG cho dashboard turbine gió — tách biệt với
+    st.session_state.dataset_manager của chat, tránh ảnh hưởng tới agent/chat_history
+    khi người dùng chỉ đang xem dashboard."""
+    if "wind_turbine_manager" not in st.session_state:
+        st.session_state.wind_turbine_manager = DatasetManager()
+    return st.session_state.wind_turbine_manager
+
+
+def _ensure_wind_turbine_dataset_loaded(manager: DatasetManager, key: str) -> bool:
+    """Load lazy (chỉ load lần đầu, cache trong manager) 1 trong 5 dataset turbine gió.
+    Trả False + hiển thị lỗi rõ ràng nếu file không tồn tại (5 file này KHÔNG git-track,
+    có thể thiếu trên máy người dùng chưa copy file — xem WIND_TURBINE_DATASET_PATHS)."""
+    if key in manager.list_datasets():
+        return True
+    path = Path(WIND_TURBINE_DATASET_PATHS[key])
+    if not path.exists():
+        st.error(
+            f"Không tìm thấy file `{path}`. 5 file turbine gió không được git-track "
+            "(xem .gitignore) — cần tự copy vào đúng thư mục `data/wind_turbine/`."
+        )
+        return False
+    with st.spinner(f"Đang nạp {key} ({path.stat().st_size / 1e6:.1f} MB)..."):
+        manager.load_csv(str(path), name=key)
+    return True
+
+
+def _render_overview_tab():
+    st.subheader("📋 Tổng quan dataset turbine gió")
+    manager = _get_wind_turbine_manager()
+    selected = st.selectbox("Chọn dataset:", list(WIND_TURBINE_DATASET_PATHS.keys()), key="overview_dataset_select")
+
+    if not _ensure_wind_turbine_dataset_loaded(manager, selected):
+        return
+
+    df = manager.get_dataframe(selected)
+    report = clean_missing_values(manager, dataset_name=selected, strategy="report")
+    dup = detect_duplicates(manager, dataset_name=selected)
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Số dòng", f"{len(df):,}")
+    if report["ok"]:
+        total_missing_cells = sum(v["count"] for v in report["data"]["missing_by_column"].values())
+        total_cells = len(df) * len(df.columns)
+        col2.metric("Tỷ lệ missing (toàn dataset)", f"{100*total_missing_cells/total_cells:.2f}%")
+    else:
+        col2.error(report["error"])
+    if dup["ok"]:
+        col3.metric("Dòng trùng lặp", f"{dup['data']['duplicate_count']:,}")
+    else:
+        col3.error(dup["error"])
+
+    if report["ok"] and report["data"]["missing_by_column"]:
+        st.write("**Chi tiết missing theo cột (chỉ cột có >0):**")
+        rows = [
+            {"cột": col, "số dòng thiếu": v["count"], "% thiếu": v["pct"]}
+            for col, v in report["data"]["missing_by_column"].items()
+        ]
+        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+    elif report["ok"]:
+        st.success("Không có cột nào bị missing trong dataset này.")
+
+
+def _render_diagnostic_tab():
+    st.subheader("🔍 Diagnostic — vấn đề đã phát hiện")
+    finding = st.selectbox(
+        "Chọn vấn đề muốn xem:",
+        ["TheoActiveW Deviation (GT1)"],  # danh sách se dai ra khi co finding moi
+        key="diagnostic_finding_select",
+    )
+
+    if finding == "TheoActiveW Deviation (GT1)":
+        manager = _get_wind_turbine_manager()
+        if not _ensure_wind_turbine_dataset_loaded(manager, "his_data_GT1"):
+            return
+
+        result = diagnose_theoretical_power_deviation(manager, dataset_name="his_data_GT1")
+        if not result["ok"]:
+            st.error(result["error"])
+            return
+
+        data = result["data"]
+        col1, col2 = st.columns(2)
+        col1.metric("Số dòng vi phạm (>10% lý thuyết)", f"{data['violation_count']:,}")
+        col2.metric("Tỷ lệ", f"{data['violation_pct']:.2f}%")
+
+        st.write("**Bảng so sánh nhóm vi phạm vs bình thường:**")
+        st.json(data["comparison"])
+
+        st.write("**Deviation% theo tercile WindSpd (đã đo trong investigation Phase 2, không tính lại):**")
+        fig = px.bar(
+            x=list(GT1_DEVIATION_TERCILE_WINDSPD.keys()),
+            y=list(GT1_DEVIATION_TERCILE_WINDSPD.values()),
+            labels={"x": "Tercile WindSpd", "y": "Deviation trung bình (%)"},
+        )
+        st.plotly_chart(fig, width="stretch")
+        st.caption(
+            "Deviation% giảm dần khi WindSpd tăng — gợi ý sai số đo lường bị khuếch đại "
+            "ở gió thấp (xem báo cáo investigation Phase 2), không phải turbine 'vượt trội' "
+            "ở gió mạnh."
+        )
+
+
+def render_wind_turbine_dashboard():
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "📋 Tổng quan", "📈 Power Curve", "🕐 Timeline",
+        "🔍 Diagnostic", "📊 KPI Summary",
+    ])
+    with tab1:
+        _render_overview_tab()
+    with tab2:
+        st.info("⏳ Cần classify_turbine_status (Phase 3 chiều) — chưa sẵn sàng")
+    with tab3:
+        st.info("⏳ Cần classification + persistence rule — chưa sẵn sàng")
+    with tab4:
+        _render_diagnostic_tab()
+    with tab5:
+        st.info("⏳ Cần calculate_turbine_kpis (chưa xây) — chưa sẵn sàng")
+
+
 def render_chat():
     st.title("⚡ Electricity Consumption AI Agent")
     st.caption("Hỏi bằng tiếng Việt về dữ liệu tiêu thụ điện hoặc tra cứu tài liệu EVN.")
@@ -482,8 +618,21 @@ def render_chat():
 
 def main():
     init_session_state()
-    render_chat()
-    render_sidebar()
+    mode = st.sidebar.radio(
+        "Chế độ xem", ["💬 Chat", "📊 Wind Turbine Dashboard"], key="view_mode"
+    )
+    if mode == "💬 Chat":
+        # render_chat() PHẢI chạy trước render_sidebar() (giữ nguyên fix cost-display-lag
+        # trước đây — sidebar đọc session_total_cost_usd, nếu chạy trước render_chat()
+        # trong cùng 1 rerun sẽ hiển thị số liệu trễ 1 câu hỏi). Lệch so với thứ tự
+        # render_sidebar() trước trong task gốc — cố ý giữ đúng thứ tự đã fix.
+        render_chat()
+        render_sidebar()
+    else:
+        # Nhánh nay KHONG BAO GIO goi render_chat() — dashboard co st.tabs ben trong,
+        # an toan vi chat_input (trong render_chat()) khong bi long vao tabs.
+        render_sidebar()
+        render_wind_turbine_dashboard()
 
 
 if __name__ == "__main__":

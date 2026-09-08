@@ -247,6 +247,26 @@ thật >50kW" trống rỗng ở cả 2 site. KHÔNG phải data-quality issue c
   liệu kỹ thuật MM82 đã ingest trong KB — nếu cần số chính xác tuyệt đối cho Phase 2,
   nên verify lại qua tài liệu đó.
 
+## Phụ lục — GT1.Common.OpSt, bảng phân bố đầy đủ (7 mã chính thức)
+
+Nhãn mã trạng thái vận hành, nguồn `data/wind_turbine/data1/note.txt` (đọc trực tiếp
+từ file đi kèm dataset — không phải suy đoán, xác nhận lại 2026-09-08):
+
+| Mã | Nhãn | Số dòng | % (trên 233.953) |
+|---|---|---|---|
+| 0 | Initialization | 7.789 | 3.33% |
+| 1 | Stop | **269** | **0.115%** |
+| 2 | Standstill | 4.717 | 2.02% |
+| 3 | Starting | 12.220 | 5.22% |
+| 4 | Run up | 1.058 | 0.45% |
+| 5 | Power Production | 205.591 | 87.88% |
+| 6 | Service | 1.634 | 0.70% |
+| (NaN) | — | 675 | 0.29% |
+
+Mã 1 (Stop) CÓ xuất hiện thật, chỉ chiếm tỷ lệ rất nhỏ (0.115%, 269/233.953 dòng) —
+turbine hiếm khi ở trạng thái Stop chính thức trong 2.2 năm dữ liệu (khác với
+Standstill/Starting là các trạng thái chuyển tiếp thường xuyên hơn nhiều).
+
 ## Sửa đổi sau verify (phiên làm việc tiếp theo)
 
 1. **Magnitude power âm**: percentile 10/25/50/75/90/99 tính trên toàn bộ giá trị âm
@@ -259,3 +279,10 @@ thật >50kW" trống rỗng ở cả 2 site. KHÔNG phải data-quality issue c
    nguyên 0 chính xác cho cả 2 điều kiện GEARBOX_OIL>90 và STATOR>150). Giải thích cũ
    bị nhầm cột (so sánh max STATOR với ngưỡng của GEARBOX_OIL) — đã sửa trong mục
    "Rule không tìm ra vi phạm nào" ở trên, kèm bảng số liệu 4 file.
+3. **OpSt mã 1 (Stop) verify lại (2026-09-08)**: một bảng markdown tóm tắt OpSt đưa ra
+   trong chat ở lượt trước (không lưu vào file nào) đã vô tình bỏ sót dòng mã 1 —
+   value_counts() thật xác nhận mã 1 CÓ xuất hiện, 269/233.953 dòng (0.115%), xem
+   "Phụ lục — GT1.Common.OpSt" ở trên cho bảng đầy đủ 7 mã kèm nhãn chính thức từ
+   `note.txt`. Đây là lỗi trình bày thủ công khi đó, KHÔNG phải lỗi tính toán của
+   `diagnose_theoretical_power_deviation()` — JSON gốc tool trả về lúc đó đã có đúng
+   giá trị này.
