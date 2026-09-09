@@ -159,6 +159,8 @@ class GroupAnomalyWindowsArgs(BaseModel):
     bin_width: float = TURBINE_DEFAULT_BIN_WIDTH
     min_consecutive_points: int = 3
     exclude_labels: Optional[list[str]] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
     dataset_name: Optional[str] = None
 
 
@@ -327,6 +329,7 @@ def execute_tool(tool_name: str, arguments: dict, dataset_manager: DatasetManage
                 dataset_manager, args.dataset_name, args.timestamp_column, args.power_column,
                 args.wind_speed_column, args.setpoint_column, args.bin_width,
                 args.min_consecutive_points, args.exclude_labels,
+                start_date=args.start_date, end_date=args.end_date,
             )
 
         elif tool_name == "detect_anomalies_ml":

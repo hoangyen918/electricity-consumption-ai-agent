@@ -166,13 +166,24 @@ def classify_turbine_status_for_agent(
 # goc (tools/turbine_diagnostic_tools.py) KHONG doi — chi cat bot o day (wrapper) truoc
 # khi tra cho LLM, uu tien giu cac window DAI NHAT (thong tin huu ich nhat cho cau hoi
 # dieu tra "khoang thoi gian nao bi keo dai").
+#
+# PHAT HIEN THAT #2 (2026-09-08, xem docs bao cao Phase 5): cap 30-dai-nhat-GLOBAL ap
+# dung TRUOC khi biet cau hoi can khoang thoi gian nao -> neu user hoi ve 1 thang cu
+# the (vd "curtailment thang 4"), cac window that trong thang do co the KHONG lot top-30
+# toan cuc va bi xoa hoan toan khoi ket qua, du that su ton tai. Da verify tren GT1 that:
+# 5 thang (4,5,6,7,10) bi xoa SACH du co tong 60 window that. FIX: them start_date/
+# end_date de filter TRUOC khi cap — neu co filter thoi gian, nguoi dung da chu dong thu
+# hep pham vi nen KHONG can cap chat (nang len 200, chi de phong truong hop cuc doan);
+# neu KHONG co filter (cau hoi tong quat toan bo dataset), GIU NGUYEN cap 30 nhu cu.
 MAX_WINDOWS_FOR_AGENT = 30
+MAX_WINDOWS_FOR_AGENT_WITH_DATE_FILTER = 200
 
 
 def group_anomaly_windows_for_agent(
     dataset_manager: DatasetManager, dataset_name: str | None, timestamp_column: str,
     power_column: str | None, wind_speed_column: str | None, setpoint_column: str | None,
     bin_width: float, min_consecutive_points: int, exclude_labels: list[str] | None,
+    start_date: str | None = None, end_date: str | None = None,
 ) -> dict:
     power_column, wind_speed_column, err = resolve_power_wind_columns(dataset_manager, dataset_name, power_column, wind_speed_column)
     if err:
@@ -188,26 +199,59 @@ def group_anomaly_windows_for_agent(
     if not result["ok"]:
         return result
     windows = result["data"]["windows"]
-    if len(windows) > MAX_WINDOWS_FOR_AGENT:
-        def _duration_seconds(w):
-            # duration la string kieu "X days HH:MM:SS" hoac "HH:MM:SS" tu str(pd.Timedelta)
+
+    date_filter_applied = start_date is not None or end_date is not None
+    if date_filter_applied:
+        # Dong bo dung convention da co o tools/dataframe_tools.py::aggregate_metric()/
+        # compare_periods(): start_date so sanh >=, end_date la CA ngay do (+1 ngay, so
+        # sanh <) — khong tu suy dien convention khac.
+        start_ts = end_ts = None
+        if start_date is not None:
             try:
-                return pd.Timedelta(w["duration"]).total_seconds()
-            except Exception:
-                return 0
+                start_ts = pd.to_datetime(start_date)
+            except (ValueError, TypeError):
+                return failure(f"Invalid start_date format: '{start_date}'")
+        if end_date is not None:
+            try:
+                end_ts = pd.to_datetime(end_date) + pd.Timedelta(days=1)
+            except (ValueError, TypeError):
+                return failure(f"Invalid end_date format: '{end_date}'")
+
+        def _in_date_range(w):
+            w_start = pd.Timestamp(w["start_time"])
+            if start_ts is not None and w_start < start_ts:
+                return False
+            if end_ts is not None and w_start >= end_ts:
+                return False
+            return True
+
+        windows = [w for w in windows if _in_date_range(w)]
+
+    max_cap = MAX_WINDOWS_FOR_AGENT_WITH_DATE_FILTER if date_filter_applied else MAX_WINDOWS_FOR_AGENT
+
+    def _duration_seconds(w):
+        # duration la string kieu "X days HH:MM:SS" hoac "HH:MM:SS" tu str(pd.Timedelta)
+        try:
+            return pd.Timedelta(w["duration"]).total_seconds()
+        except Exception:
+            return 0
+
+    result["data"]["date_filter_applied"] = {"start_date": start_date, "end_date": end_date} if date_filter_applied else None
+    result["data"]["windows_total_found"] = len(windows)
+
+    if len(windows) > max_cap:
         sorted_windows = sorted(windows, key=_duration_seconds, reverse=True)
-        result["data"]["windows"] = sorted_windows[:MAX_WINDOWS_FOR_AGENT]
+        result["data"]["windows"] = sorted_windows[:max_cap]
         result["data"]["windows_truncated"] = True
-        result["data"]["windows_total_found"] = len(windows)
         result["data"]["windows_truncation_note"] = (
-            f"Tìm được {len(windows)} khoảng thời gian, chỉ hiển thị {MAX_WINDOWS_FOR_AGENT} "
-            "khoảng DÀI NHẤT (sắp theo duration giảm dần) để tránh kết quả quá lớn. Nếu cần "
-            "thu hẹp phạm vi thật (không chỉ hiển thị ít hơn), gọi lại với exclude_labels cụ "
-            "thể hơn (vd chỉ giữ đúng nhãn quan tâm) hoặc tăng min_consecutive_points."
+            f"Tìm được {len(windows)} khoảng thời gian, chỉ hiển thị {max_cap} khoảng DÀI "
+            "NHẤT (sắp theo duration giảm dần) để tránh kết quả quá lớn. Nếu cần thu hẹp "
+            "phạm vi thật (không chỉ hiển thị ít hơn), gọi lại với exclude_labels cụ thể "
+            "hơn, tăng min_consecutive_points, hoặc thu hẹp start_date/end_date hơn nữa."
         )
     else:
+        result["data"]["windows"] = windows
         result["data"]["windows_truncated"] = False
-        result["data"]["windows_total_found"] = len(windows)
     return result
 
 

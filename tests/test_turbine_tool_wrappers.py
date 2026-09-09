@@ -133,3 +133,84 @@ def test_group_anomaly_windows_for_agent_no_truncation_when_small(tmp_path):
     )
     assert result["ok"] is True
     assert result["data"]["windows_truncated"] is False
+
+
+# ======================= start_date/end_date time-filter fix =======================
+# Phat hien that (bao cao truoc): goi group_anomaly_windows KHONG filter thoi gian tren
+# GT1 that -> cap 30-dai-nhat-TOAN-CUC ap dung TRUOC khi biet cau hoi can khoang nao ->
+# 5 thang (4,5,6,7,10) bi xoa SACH ket qua du co 60 window that (14+9+10+3+24) trong do.
+# CURTAILMENT_EXCLUDE_LABELS chi giu Curtailment/Partial Curtailment (dung nhu khi
+# phat hien bug).
+CURTAILMENT_EXCLUDE_LABELS = ["Normal", "Measurement Error", "Stop", "Under Production", "Over Production", "Partial Stop"]
+
+
+def test_group_anomaly_windows_bug_reproduction_default_cap_unchanged_without_date_filter():
+    """Tai hien DUNG bug da tim: KHONG truyen start_date/end_date -> hanh vi mac dinh
+    KHONG doi, van cap 30-dai-nhat-toan-cuc nhu truoc khi co fix nay."""
+    m = DatasetManager()
+    m.load_csv(GT1_PATH_REAL, name="GT1")
+
+    result = group_anomaly_windows_for_agent(
+        m, "GT1", "datetime", None, None, "GT1.SP.ActualSPP", TURBINE_DEFAULT_BIN_WIDTH, 3,
+        CURTAILMENT_EXCLUDE_LABELS,
+    )
+    assert result["ok"] is True
+    assert result["data"]["windows_truncated"] is True
+    assert len(result["data"]["windows"]) == MAX_WINDOWS_FOR_AGENT
+    assert result["data"]["windows_total_found"] == 350  # da xac nhan that qua dieu tra
+    assert result["data"]["date_filter_applied"] is None
+
+    # xac nhan dung bug: cac thang co window that (4,5,6,7,10) bi xoa sach khoi ket qua
+    months_in_result = {pd.Timestamp(w["start_time"]).month for w in result["data"]["windows"]}
+    for missing_month in (4, 5, 6, 7, 10):
+        assert missing_month not in months_in_result, (
+            f"Thang {missing_month} khong con bi mat nua — hanh vi mac dinh (khong filter) da BI DOI, vi pham rang buoc 'khong doi hanh vi mac dinh'"
+        )
+
+
+def test_group_anomaly_windows_fix_date_filter_recovers_previously_hidden_month():
+    """Fix: truyen start_date/end_date cho thang 4/2024 (thang da xac nhan bi xoa sach
+    boi cap mac dinh) -> phai thay DAY DU 4 window that cua thang do, khong bi cap mat
+    (4 < MAX_WINDOWS_FOR_AGENT_WITH_DATE_FILTER=200 nen khong truncate)."""
+    m = DatasetManager()
+    m.load_csv(GT1_PATH_REAL, name="GT1")
+
+    result = group_anomaly_windows_for_agent(
+        m, "GT1", "datetime", None, None, "GT1.SP.ActualSPP", TURBINE_DEFAULT_BIN_WIDTH, 3,
+        CURTAILMENT_EXCLUDE_LABELS, start_date="2024-04-01", end_date="2024-04-30",
+    )
+    assert result["ok"] is True
+    assert result["data"]["windows_truncated"] is False
+    assert result["data"]["windows_total_found"] == 4  # so that cho DUNG thang 4/2024 (khac 14 = ca thang 4/2024 va 2025 gop lai)
+    assert len(result["data"]["windows"]) == 4
+    assert result["data"]["date_filter_applied"] == {"start_date": "2024-04-01", "end_date": "2024-04-30"}
+
+    for w in result["data"]["windows"]:
+        w_start = pd.Timestamp(w["start_time"])
+        assert w_start.year == 2024 and w_start.month == 4
+
+
+def test_group_anomaly_windows_date_filter_empty_range_returns_empty_not_error():
+    """Edge case: khoang thoi gian khong co anomaly nao (hoac ngoai pham vi dataset) ->
+    tra ve rong dung nghia, KHONG loi."""
+    m = DatasetManager()
+    m.load_csv(GT1_PATH_REAL, name="GT1")
+
+    result = group_anomaly_windows_for_agent(
+        m, "GT1", "datetime", None, None, "GT1.SP.ActualSPP", TURBINE_DEFAULT_BIN_WIDTH, 3,
+        CURTAILMENT_EXCLUDE_LABELS, start_date="2030-01-01", end_date="2030-01-31",
+    )
+    assert result["ok"] is True
+    assert result["data"]["windows"] == []
+    assert result["data"]["windows_total_found"] == 0
+    assert result["data"]["windows_truncated"] is False
+
+
+def test_group_anomaly_windows_date_filter_invalid_format_fails_gracefully():
+    m = DatasetManager()
+    m.load_csv(GT1_PATH_REAL, name="GT1")
+    result = group_anomaly_windows_for_agent(
+        m, "GT1", "datetime", None, None, "GT1.SP.ActualSPP", TURBINE_DEFAULT_BIN_WIDTH, 3,
+        CURTAILMENT_EXCLUDE_LABELS, start_date="khong-phai-ngay-hop-le",
+    )
+    assert result["ok"] is False

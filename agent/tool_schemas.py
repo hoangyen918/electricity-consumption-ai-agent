@@ -415,7 +415,12 @@ GROUP_ANOMALY_WINDOWS_SCHEMA = {
             "KHOẢNG THỜI GIAN cụ thể (start/end/duration) — chỉ giữ khoảng đủ dài "
             "(min_consecutive_points điểm liên tiếp trở lên), loại nhiễu ngắn hạn lẻ tẻ. Dùng "
             "khi câu hỏi hỏi về khoảng thời gian/giai đoạn bị 1 vấn đề cụ thể kéo dài (vd "
-            "'có curtailment kéo dài không', 'khoảng nào bị dừng lâu')."
+            "'có curtailment kéo dài không', 'khoảng nào bị dừng lâu'). QUAN TRỌNG: nếu câu "
+            "hỏi hỏi về 1 khoảng thời gian cụ thể (tháng, quý, năm — vd 'curtailment tháng 4'), "
+            "LUÔN truyền start_date/end_date tương ứng — nếu không, kết quả mặc định chỉ giữ 30 "
+            "khoảng DÀI NHẤT trên TOÀN BỘ dataset và có thể bỏ sót hoàn toàn tháng bạn hỏi (nếu "
+            "các khoảng trong tháng đó ngắn hơn 30 khoảng dài nhất toàn cục) — đã xác nhận bằng "
+            "dữ liệu thật: có tháng bị mất sạch kết quả dù có vấn đề thật xảy ra."
         ),
         "parameters": {
             "type": "object",
@@ -427,6 +432,8 @@ GROUP_ANOMALY_WINDOWS_SCHEMA = {
                 "bin_width": TURBINE_BIN_WIDTH_PROPERTY,
                 "min_consecutive_points": {"type": "integer", "description": "Số điểm liên tiếp tối thiểu để tính là 1 khoảng thời gian (mặc định 3)"},
                 "exclude_labels": {"type": "array", "items": {"type": "string"}, "description": "Nhãn muốn loại khỏi kết quả, mặc định ['Normal'] (chỉ quan tâm khoảng bất thường)"},
+                "start_date": {"type": "string", "description": "YYYY-MM-DD. Chỉ giữ khoảng thời gian bắt đầu từ ngày này trở đi. Truyền cùng end_date khi câu hỏi giới hạn 1 khoảng thời gian cụ thể — khi có start_date/end_date, KHÔNG áp dụng giới hạn 30 khoảng nữa (chỉ áp dụng cho câu hỏi tổng quát toàn bộ dataset)."},
+                "end_date": {"type": "string", "description": "YYYY-MM-DD, bao gồm trọn ngày này. Để trống nếu không giới hạn điểm cuối."},
                 "dataset_name": DATASET_NAME_PROPERTY,
             },
             "required": [],
