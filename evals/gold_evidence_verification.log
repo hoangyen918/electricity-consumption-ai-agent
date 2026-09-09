@@ -191,3 +191,66 @@ p.194, "Energy Efficiency 2024 p.104" bị loại khỏi acceptable_alternative_
 không liên quan), both_006 (WEO 2019 p.259→WEO 2025 p.194, CHƯA verify bằng đọc PDF), both_007
 (Energy Efficiency 2024 p.104→WEO 2025 p.194). Đã KHÔNG sửa gì trong rag/ — đây thuần là sửa
 dữ liệu test (cases.jsonl).
+
+=== BỔ SUNG: kb_004 (2026-09-09) ===
+Phương pháp: đọc trực tiếp nội dung chunk thật qua collection.get() (ChromaDB local, không
+qua retrieve()/API) cho cả 2 ấn bản báo cáo EVN, không suy đoán.
+
+Nguyên nhân lỗi cũ: gold_evidence trỏ sai trang (2022-2023, page 10 — nội dung THẬT của
+trang này là về thanh toán không dùng tiền mặt/dịch vụ khách hàng, KHÔNG liên quan sản lượng
+điện). answer_must_contain_any trộn nhầm 2 khái niệm khác nhau: "271.68"/"271,68" (tổng SẢN
+XUẤT thuần túy, tự cộng dồn từ bảng "Power generation output by ownership" trang 7 của báo
+cáo 2022-2023 — KHÔNG có dòng tổng nào nêu rõ, phải tự suy ra bằng cách cộng 6 số) và
+"280.814" (tổng SẢN XUẤT VÀ MUA, nêu rõ tường minh) — câu hỏi kb_004 hỏi đúng "sản xuất VÀ
+MUA", chỉ có 280.814 khớp đúng khái niệm.
+
+Bằng chứng — trích nguyên văn chunk EVN Annual Report 2024-2025, trang 7 (đọc trực tiếp qua
+collection.get(), không qua retrieve()):
+  "Power production
+   Power generation output by ownership
+   2023  2024
+   EVN  39,145  49,830
+   GENCO 1  30,789  32,158
+   GENCO 2  15,960  16,414
+   GENCO 3  29,110  26,046
+   Others  156,319  173,346
+   Unit: million kWh
+   ...
+   Total power production and purchase
+   280,814  308,732"
+Dòng "Total power production and purchase" nêu RÕ RÀNG, tường minh, không cần suy luận —
+280,814 (2023) khớp CHÍNH XÁC khái niệm câu hỏi hỏi.
+
+Đối chiếu — báo cáo 2022-2023 (trang 7, đọc trực tiếp, toàn bộ chunk, không cắt) KHÔNG có
+dòng "Total power production and purchase" hay bất kỳ khái niệm "sản xuất và mua" nào ở đâu
+cả — chỉ có bảng "Power generation output by ownership" (SẢN XUẤT thuần túy, theo đơn vị sở
+hữu: EVN/GENCO1/PCs/GENCO2/GENCO3/Others = 39.145/356/30.789/15.960/29.110/156.319 triệu kWh
+năm 2023). Đã search toàn bộ report 2022-2023 cho từ khóa "purchase" — không có chunk nào
+nêu tổng sản xuất+mua tường minh. Cộng dồn 6 số trên = 271.679 (số agent từng trả lời, và số
+answer_must_contain_any cũ chấp nhận qua dạng làm tròn "271.68" tỷ) — nhưng đây là SẢN XUẤT
+THUẦN TÚY (production by ownership), KHÔNG PHẢI sản xuất+mua, khác khái niệm câu hỏi hỏi.
+Đối chiếu thêm: báo cáo 2024-2025 cũng có lại đúng bảng "Power generation output by
+ownership" (không đổi 5/6 dòng số so với báo cáo 2022-2023, chỉ thiếu dòng "GENCO 1"=356/
+"PCs"=30.789 tách riêng — khả năng do lỗi OCR/trích xuất chart đã biết, xem "Chunking
+granularity" ở DATA_SOURCES.md), tổng ~271.323-271.679 tùy cách tính — LUÔN khác với dòng
+"Total power production and purchase"=280.814 nêu rõ ngay bên dưới trên CÙNG trang — xác
+nhận đây là 2 khái niệm EVN tự phân biệt rõ ràng trong báo cáo của chính họ, không phải
+cùng 1 con số viết 2 cách.
+
+Đã sửa (evals/cases.jsonl): answer_must_contain_any rút gọn về đúng 1 khái niệm
+["280.814","280,814","280814"] (xóa "271.68","271,68","271.679","271,679","271679" —
+3 biến thể "271.679..." từng được thêm ở 1 lần sửa TRƯỚC đó trong cùng ngày, dựa trên giả
+định sai "271.68 và 280.814 là cùng 1 sự thật khác ấn bản" — giả định này đã bị bác bỏ bằng
+điều tra này). gold_evidence đổi từ {2022-2023, page 10} (sai, không liên quan) sang
+{2024-2025, page 7} (đã verify đúng, tường minh). acceptable_alternative_evidence (vốn chỉ
+có đúng 1 entry {2024-2025, page 7}, nay trùng gold_evidence mới) đã bị xóa khỏi case —
+không giữ field rỗng.
+
+LƯU Ý QUAN TRỌNG (chưa xử lý, cần biết): agent trong lần chạy eval 20260909_165945 đã trả
+lời "271 679 triệu kWh" (khái niệm SẢN XUẤT THUẦN TÚY, trích từ báo cáo 2022-2023) cho câu
+hỏi kb_004 — KHÔNG PHẢI 280,814 (sản xuất và mua, đáp án đúng theo gold_evidence mới). Sau
+khi sửa answer_must_contain_any về đúng 1 khái niệm, content_ok của lần chạy CỤ THỂ đó sẽ
+chuyển thành False (không phải True như báo cáo ban đầu) — đây không còn là test-design gap
+nữa, mà là agent đã trả lời SAI KHÁI NIỆM (production thay vì production+purchase) trong lần
+chạy đó. Chưa xác định đây là lỗi hệ thống lặp lại hay ngẫu nhiên (chỉ có 1 lần chạy được ghi
+nhận) — cần thêm dữ liệu (chạy lại thật) nếu muốn kết luận chắc chắn mức độ phổ biến.
