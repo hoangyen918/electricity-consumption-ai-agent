@@ -10,10 +10,19 @@ import re
 
 from services.openrouter_client import chat_completion
 
-# Model Judge — verified tồn tại thật qua GET /api/v1/models (giá $0.75/M input,
-# $3.75/M output, context 1.05M), khác họ hoàn toàn với qwen3.6-27b (agent chính)
-# để tránh bias tự chấm cùng nhà.
-JUDGE_MODEL = "google/gemini-3.8-flash"
+# Model Judge — đổi từ "google/gemini-3.8-flash" (qua OpenRouter) sang
+# "ag/gemini-3.7-flash-medium" (qua CHAT_BASE_URL/tunnel mới, xem
+# services/openrouter_client.py) khi agent chính chuyển sang gọi tunnel này. ĐÃ
+# VERIFY THẬT (không giả định): gọi trực tiếp tunnel với model="ag/gemini-3.7-flash-
+# medium" trả về field "model": "gemini-3.7-flash-tiered" trong response — khác họ
+# hoàn toàn với "gpt-oss-120b-medium" (model agent chính dùng qua cùng tunnel này) —
+# xác nhận đây là 2 model THẬT KHÁC NHAU, không phải tunnel phớt lờ tên gửi lên và
+# luôn trả về cùng 1 model. Vẫn giữ nguyên tên GỬI LÊN "ag/gemini-3.7-flash-medium"
+# (không phải "gemini-3.7-flash-tiered" — đó chỉ là tên tunnel echo lại, không phải
+# tên cần gửi). Judge dùng CHUNG chat_completion()/_client với agent chính (cả 2 qua
+# CHAT_BASE_URL) — có chủ đích, không phải thiếu sót; khác model đủ để tránh bias tự
+# chấm cùng nhà dù chung 1 client/base_url.
+JUDGE_MODEL = "ag/gemini-3.7-flash-medium"
 
 
 JUDGE_SYSTEM_PROMPT = """Bạn là chuyên gia đánh giá chất lượng câu trả lời của một AI agent trả lời câu hỏi tiếng Việt về ngành điện Việt Nam (dựa trên báo cáo thường niên EVN, văn bản chính sách tiết kiệm điện, và báo cáo năng lượng quốc tế IEA). Agent này dùng kỹ thuật RAG (Retrieval-Augmented Generation): nó tìm các đoạn tài liệu (chunks) liên quan, rồi tổng hợp câu trả lời dựa trên các chunks đó.
