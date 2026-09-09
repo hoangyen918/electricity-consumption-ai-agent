@@ -17,6 +17,7 @@ from config.settings import SETTINGS
 from rag.vector_store import count_documents
 from rag.retriever import SCORE_THRESHOLD
 from evals.run_evals import REFUSAL_PATTERNS, THRESHOLDS
+from evals.llm_judge import diagnose_rag_quality
 
 st.set_page_config(page_title=SETTINGS.app_title, page_icon="⚡", layout="wide")
 
@@ -366,7 +367,72 @@ def _word_overlap_ratio(answer: str, chunk_text: str) -> float:
     return len(chunk_words & answer_words) / len(chunk_words)
 
 
-def render_trace_expander(trace_info: dict):
+def _render_rag_judge_section(trace_info: dict, search_chunks: list[dict], msg_id) -> None:
+    """Nút 'Chấm chi tiết' — CHỈ gọi Judge khi bấm, kết quả cache theo msg_id trong
+    session_state để rerun/bấm lại KHÔNG gọi lại API (tốn tiền + chậm 15-20s)."""
+    cache = st.session_state.setdefault("rag_judge_cache", {})
+
+    if st.button("🔍 Chấm chi tiết (Retrieval/Generation)", key=f"rag_judge_btn_{msg_id}"):
+        if msg_id not in cache:
+            with st.spinner("Đang chấm Retrieval/Generation bằng LLM Judge (~15-20s)..."):
+                cache[msg_id] = diagnose_rag_quality(
+                    question=trace_info.get("question", ""),
+                    answer=trace_info.get("answer", ""),
+                    retrieved_chunks=search_chunks,
+                )
+
+    if msg_id in cache:
+        _display_rag_judge_result(cache[msg_id])
+
+
+def _display_rag_judge_result(result: dict) -> None:
+    verdict = result.get("verdict")
+    verdict_display = {
+        "OK": ("✅ OK — không phát hiện vấn đề rõ rệt", st.success),
+        "RETRIEVAL_ISSUE": ("🔴 Vấn đề ở RETRIEVAL — chunk lấy về không liên quan tới câu hỏi", st.error),
+        "GENERATION_ISSUE": ("🔴 Vấn đề ở GENERATION — câu trả lời không bám sát nội dung chunk", st.error),
+        "BOTH_ISSUES": ("🔴 Vấn đề CẢ HAI — retrieval kém VÀ câu trả lời không bám chunk", st.error),
+        "NO_CONTEXT": ("⚪ Không có chunk nào để đánh giá retrieval", st.info),
+        "JUDGE_ERROR": ("⚠️ Judge gọi API lỗi — thử bấm lại", st.warning),
+    }
+    label, renderer = verdict_display.get(verdict, (f"Kết quả: {verdict}", st.info))
+    renderer(label)
+
+    faithfulness = result.get("faithfulness")
+    relevancy = result.get("answer_relevancy")
+    context_prec = result.get("context_precision")
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Faithfulness", f"{faithfulness['faithfulness_score']*100:.0f}%" if faithfulness else "N/A")
+    c2.metric("Answer Relevancy", f"{relevancy['relevancy_score']*100:.0f}%" if relevancy else "N/A")
+    context_score = context_prec.get("context_precision_score") if context_prec else None
+    c3.metric("Context Precision", f"{context_score*100:.0f}%" if context_score is not None else "N/A")
+
+    st.caption(
+        "_Ngưỡng heuristic ban đầu (chưa validate tuyệt đối): context_precision<0.5 "
+        "và faithfulness>=0.8 → RETRIEVAL_ISSUE; context_precision>=0.5 và faithfulness<0.8 "
+        "→ GENERATION_ISSUE. Context Precision = Average Precision (AP@k) trên verdict "
+        "true/false của Judge cho từng chunk, có trọng số theo rank — không phải tỷ lệ đơn giản._"
+    )
+
+    if faithfulness and faithfulness.get("claims"):
+        unsupported = [c for c in faithfulness["claims"] if not c.get("supported")]
+        if unsupported:
+            with st.expander(f"❌ {len(unsupported)} claim không có căn cứ trong chunk"):
+                for c in unsupported:
+                    st.write(f"- **{c.get('text', '')}** — {c.get('reason', '')}")
+
+    if context_prec and context_prec.get("chunks"):
+        chunks_detail = context_prec["chunks"]
+        with st.expander(f"📄 Chi tiết {len(chunks_detail)} chunk (verdict retrieval)"):
+            for i, c in enumerate(chunks_detail, start=1):
+                mark = "✅" if c.get("relevant") else "❌"
+                st.write(f"{mark} [{i}] **{c.get('source', '')}** (trang {c.get('page', '')}) — relevant={c.get('relevant')}")
+            if context_prec.get("explanation"):
+                st.caption(context_prec["explanation"])
+
+
+def render_trace_expander(trace_info: dict, msg_id):
     with st.expander("🔍 Xem chi tiết xử lý (Agent Trace)"):
         col1, col2, col3 = st.columns(3)
         col1.metric("Số bước lặp", trace_info["iterations"])
@@ -445,6 +511,10 @@ def render_trace_expander(trace_info: dict):
         if search_chunks and has_citation_marker and overlap_ratio < 0.15:
             st.warning("⚠️ Answer trích nguồn nhưng ít từ trùng với nội dung chunk "
                        "— có thể agent diễn giải quá xa nội dung gốc, nên tự kiểm tra lại.")
+
+        if search_chunks:
+            st.divider()
+            _render_rag_judge_section(trace_info, search_chunks, msg_id)
 
 
 def _get_wind_turbine_manager() -> DatasetManager:
@@ -607,11 +677,11 @@ def render_chat():
     st.title("⚡ Electricity Consumption AI Agent")
     st.caption("Hỏi bằng tiếng Việt về dữ liệu tiêu thụ điện hoặc tra cứu tài liệu EVN.")
 
-    for msg in st.session_state.chat_history:
+    for idx, msg in enumerate(st.session_state.chat_history):
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
             if msg["role"] == "assistant" and "trace_info" in msg:
-                render_trace_expander(msg["trace_info"])
+                render_trace_expander(msg["trace_info"], idx)
 
     with st.bottom:
         question = st.chat_input("Nhập câu hỏi của bạn...")
@@ -638,8 +708,11 @@ def render_chat():
                             "trace": result["trace"],
                             "usage_per_call": result["usage_per_call"],
                             "answer": result["answer"],
+                            "question": question,
                         }
-                        render_trace_expander(trace_info)
+                        # msg_id = index NÓ sẽ có trong chat_history sau khi append bên dưới
+                        # (user message đã append, len hiện tại == index tương lai của assistant)
+                        render_trace_expander(trace_info, len(st.session_state.chat_history))
                         st.session_state.chat_history.append({
                             "role": "assistant",
                             "content": result["answer"],
