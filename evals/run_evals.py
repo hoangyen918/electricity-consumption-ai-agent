@@ -17,6 +17,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 from tools.dataset_manager import DatasetManager
 from agent.agent import Agent
+from config.settings import SETTINGS
 
 CASES_PATH = Path("evals/cases.jsonl")
 RESULTS_DIR = Path("evals/results")
@@ -115,6 +116,18 @@ def _compute_retrieval_metrics(case: dict, trace: list[dict], answer: str) -> di
         "recall_10": rank is not None and rank <= 10,
         "citation_correct": any(_citation_matches_answer(ev, answer) for ev in all_evidence),
     }
+
+
+def _failed_check_names(checks: dict) -> list[str]:
+    """Tên các check bị fail trong 1 case — DÙNG CHUNG cho cả in per-case (Bước 1)
+    lẫn group case fail theo loại check (Bước 4), KHÔNG đổi logic tính passed ở đâu
+    cả, chỉ đọc lại checks đã có sẵn để trình bày rõ hơn. Case lỗi exception (checks
+    = {"exception": "..."}) có value là chuỗi lỗi (truthy) chứ không phải False/True
+    như các check bình thường — xử lý riêng để vẫn liệt kê đúng là "exception" thay
+    vì bị bỏ sót do `not v` không đúng trên 1 chuỗi non-empty."""
+    if "exception" in checks:
+        return ["exception"]
+    return [k for k, v in checks.items() if not v]
 
 
 def load_cases() -> list[dict]:
@@ -251,7 +264,10 @@ def main():
                 "retrieval": None,
             }
         all_results.append(r)
-        print(f"    -> {'PASS' if r['passed'] else 'FAIL'}")
+        if r["passed"]:
+            print("    -> PASS")
+        else:
+            print(f"    -> FAIL ({', '.join(_failed_check_names(r['checks']))})")
 
     total = len(all_results)
     passed = sum(1 for r in all_results if r["passed"])
@@ -267,6 +283,10 @@ def main():
     total_cost = sum(r["estimated_cost_usd"] or 0 for r in all_results)
     latencies = [r["latency_ms"] for r in all_results if r["latency_ms"] is not None]
     avg_latency = sum(latencies) / len(latencies) if latencies else 0
+    # số lần gọi LLM thật = tổng iterations (mỗi iteration = đúng 1 lần gọi chat_completion(),
+    # xem agent/loop.py::run_agent_loop) — chính xác hơn dùng số case (1 case có thể tốn
+    # nhiều lần gọi LLM qua nhiều iteration).
+    total_llm_calls = sum(r["iterations"] or 0 for r in all_results)
 
     # --- tool_selection_correctness — metric CỘNG THÊM, độc lập với accuracy/checks ---
     tool_selection_cases = [r for r in all_results if r.get("expected_tool")]
@@ -326,6 +346,28 @@ def main():
         ],
     }
 
+    # --- Retrieval metrics TÁCH THEO CATEGORY (Bước 2 cải thiện báo cáo) — 1 số gộp
+    # duy nhất (kb_qa + both trộn chung) che mất chênh lệch thật giữa 2 category, vd
+    # kb_qa 50% accuracy vs both 28.6% accuracy nhưng chung 1 số retrieval thì không
+    # biết category nào là điểm nghẽn. KHÔNG đổi cách tính từng metric, chỉ nhóm lại
+    # theo category thay vì gộp hết.
+    retrieval_by_category = {}
+    for cat in sorted({r["category"] for r in retrieval_results}):
+        cat_results = [r for r in retrieval_results if r["category"] == cat]
+        n_cat = len(cat_results)
+        retrieval_by_category[cat] = {
+            "n_cases": n_cat,
+            "recall_at_5": round(sum(1 for r in cat_results if r["retrieval"]["recall_5"]) / n_cat, 4),
+            "recall_at_10": round(sum(1 for r in cat_results if r["retrieval"]["recall_10"]) / n_cat, 4),
+            "mrr": round(
+                sum((1 / r["retrieval"]["rank"]) if r["retrieval"]["rank"] else 0 for r in cat_results) / n_cat, 4
+            ),
+            "citation_correctness_rate": round(
+                sum(1 for r in cat_results if r["retrieval"]["citation_correct"]) / n_cat, 4
+            ),
+        }
+    retrieval_summary["by_category"] = retrieval_by_category
+
     accuracy = round(passed / total, 4) if total else 0
 
     summary = {
@@ -372,6 +414,9 @@ def main():
     print(f"Tổng số câu: {total}")
     print(f"Pass: {passed} ({accuracy*100:.1f}%)")
     print(f"Tổng chi phí: ${total_cost:.6f}")
+    if total_cost < 0.01 and total_llm_calls > 10:
+        print(f"⚠️  Cost gần 0 bất thường — model {SETTINGS.chat_model} có thể chưa có trong "
+              f"MODEL_PRICING, số liệu cost KHÔNG đáng tin.")
     print(f"Latency trung bình: {avg_latency:.0f} ms")
     print("\nTheo category:")
     for cat, v in summary["by_category"].items():
@@ -384,6 +429,12 @@ def main():
     print(f"Recall@10: {recall_at_10*100:.1f}%")
     print(f"MRR:       {mrr:.4f}")
     print(f"Citation correctness: {citation_correctness_rate*100:.1f}%")
+    if retrieval_by_category:
+        print("\nTheo category:")
+        for cat, v in retrieval_by_category.items():
+            print(f"  {cat} ({v['n_cases']} case): Recall@5={v['recall_at_5']*100:.1f}% "
+                  f"Recall@10={v['recall_at_10']*100:.1f}% MRR={v['mrr']:.4f} "
+                  f"Citation={v['citation_correctness_rate']*100:.1f}%")
 
     print("\n" + "-" * 60)
     print(f"TOOL SELECTION CORRECTNESS ({n_tool_selection} case có field expected_tool)")
@@ -391,11 +442,10 @@ def main():
     if n_tool_selection:
         print(f"Đúng tool: {sum(1 for r in tool_selection_cases if r['tool_selection_correct'])}/{n_tool_selection} "
               f"({tool_selection_rate*100:.1f}%)")
-        wrong = [r for r in tool_selection_cases if not r["tool_selection_correct"]]
-        if wrong:
-            print("Case chọn sai tool:")
-            for r in wrong:
-                print(f"  {r['id']}: expected={r['expected_tool']}, thực tế gọi={r['tool_names']}")
+        print("\nBảng expected vs actual (MỌI case có expected_tool, không chỉ case sai):")
+        for r in tool_selection_cases:
+            mark = "✓" if r["tool_selection_correct"] else "✗"
+            print(f"  {mark} {r['id']}: expected={r['expected_tool']} | thực tế gọi={r['tool_names']}")
     else:
         print("(Không có case nào có field expected_tool)")
 
@@ -426,8 +476,19 @@ def main():
     print(f"\n=> {'PASS' if overall_pass else 'FAIL'} TỔNG THỂ")
 
     if not overall_pass:
-        failing_cases = [r["id"] for r in all_results if not r["passed"]]
-        print(f"\nCase gây FAIL accuracy tổng thể: {failing_cases}")
+        # Group theo LOẠI CHECK thất bại (Bước 4 cải thiện báo cáo) thay vì 1 list
+        # phẳng không rõ nguyên nhân — 1 case có thể fail NHIỀU check cùng lúc nên
+        # xuất hiện ở nhiều nhóm, không phải phân vùng loại trừ lẫn nhau.
+        failing_by_check: dict[str, list[str]] = {}
+        for r in all_results:
+            if r["passed"]:
+                continue
+            for check_name in _failed_check_names(r["checks"]):
+                failing_by_check.setdefault(check_name, []).append(r["id"])
+        print(f"\nCase gây FAIL accuracy tổng thể, nhóm theo loại check thất bại "
+              f"({sum(1 for r in all_results if not r['passed'])} case, 1 case có thể fail nhiều check):")
+        for check_name, ids in failing_by_check.items():
+            print(f"  {check_name} ({len(ids)}): {ids}")
         if recall_at_10 < THRESHOLDS["recall_at_10_min"]:
             low_recall_cases = [
                 r["id"] for r in retrieval_results if not r["retrieval"]["recall_10"]
