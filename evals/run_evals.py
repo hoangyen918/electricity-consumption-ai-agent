@@ -130,6 +130,26 @@ def _failed_check_names(checks: dict) -> list[str]:
     return [k for k, v in checks.items() if not v]
 
 
+def _normalize_for_matching(text: str) -> str:
+    """Bỏ TOÀN BỘ khoảng trắng (kể cả NARROW NO-BREAK SPACE U+202F, NO-BREAK SPACE
+    U+00A0 — gpt-oss dùng làm dấu phân cách nghìn/trước %, đúng định dạng số nhưng
+    khác byte 0x20) trước khi so khớp answer_must_contain_any.
+
+    ĐÃ THỬ chỉ đổi U+202F/U+00A0 thành space thường trước — chỉ fix được 2/10 case
+    Group A (kb_009, kb_010, vốn expected_answer_contains ĐÃ có sẵn biến thể có
+    space, vd '6 %'), 8 case còn lại (kb_004, kb_006, kb_013, kb_014, both_001/
+    002/004/005) KHÔNG có biến thể có-space nào trong expected_answer_contains —
+    đổi loại space không tạo ra match nếu list chưa từng liệt kê dạng có space.
+    Bỏ HẲN khoảng trắng thay vì chỉ đổi loại thì khớp được với các entry KHÔNG có
+    separator sẵn có trong list (vd '280 814' -> '280814', đã có sẵn trong
+    expected_answer_contains của kb_004) — verify thật bằng cách so trước/sau
+    trên toàn bộ 58 case cached, không chỉ 10 case mục tiêu.
+
+    CHỈ áp dụng cho answer_must_contain_any (content_ok) — KHÔNG đụng
+    answer_must_not_contain/refused_appropriately/các check khác."""
+    return re.sub(r"\s+", "", text)
+
+
 def load_cases() -> list[dict]:
     cases = []
     with CASES_PATH.open(encoding="utf-8") as f:
@@ -165,7 +185,10 @@ def evaluate_case(agent: Agent, case: dict) -> dict:
 
     expected_contains = case.get("answer_must_contain_any")
     if expected_contains:
-        checks["content_ok"] = any(s.lower() in answer_lower for s in expected_contains)
+        normalized_answer = _normalize_for_matching(answer_lower)
+        checks["content_ok"] = any(
+            _normalize_for_matching(s.lower()) in normalized_answer for s in expected_contains
+        )
     else:
         checks["content_ok"] = True
 
