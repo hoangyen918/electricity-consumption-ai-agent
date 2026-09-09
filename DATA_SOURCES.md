@@ -409,3 +409,12 @@ calls back-to-back) — observed repeatedly on 2026-09-02. Suspected cause: Open
 rate-limiting or network contention under sustained load; not yet investigated further. If a
 full-suite run fails specifically in this file, re-run it alone before concluding there is a
 real regression.
+
+### Lưu ý chi phí — chạy test có chọn lọc, không luôn full suite
+
+`tests/test_agent.py` và `tests/test_security.py` gọi API thật (không mock). Full suite
+(`pytest tests/ -v`) nên CHỈ chạy trước khi commit chính thức hoặc kết thúc 1 phase — KHÔNG
+chạy sau mỗi sửa lỗi nhỏ lẻ tẻ. Với sửa nhỏ, chỉ chạy đúng file test liên quan (vd
+`pytest tests/test_dataset_manager.py -v`). Full suite chạy lặp lại nhiều lần trong 1 ngày
+làm việc dài là nguồn tốn credit API âm thầm, dễ bị bỏ sót vì mỗi lần trông rẻ nhưng cộng
+dồn lớn.
