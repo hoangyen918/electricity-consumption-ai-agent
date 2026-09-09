@@ -371,6 +371,21 @@ cited 99.6% (2023) from the trend table rather than the calibrated ground-truth 
 this is an eval-calibration ambiguity (which year the question implicitly asks about), not an
 agent or retrieval error.
 
+### Update — fixed with MAX_SEARCH_KB_CALLS hard guard, false-positive checked
+
+The targeted fix considered above was eventually applied (system prompt cap + a hard
+structural guard in agent/loop.py: after MAX_SEARCH_KB_CALLS=3 calls, search_knowledge_base
+is removed from the tools list sent to the LLM for the next turn), after this exact pattern
+reproduced much more severely (2/3 runs, later 2/5) on a new chat model (gpt-oss via a new
+endpoint) than it ever did with the original model.
+
+Đã kiểm tra false-positive: 10 lần chạy thật qua 2 câu hỏi cần thông tin từ NHIỀU chủ đề khác
+biệt thật (không phải lặp lại) — cả 2 case đều đủ trong ≤3 lần search (dư margin 1 lần),
+không có lần nào bị cắt oan. Rủi ro còn lại (câu hỏi cần ≥3 chủ đề thật khác biệt trong 1
+lượt) chưa loại trừ hoàn toàn — không có case nào như vậy tồn tại trong cases.jsonl hiện tại
+(58 case), chấp nhận được vì hậu quả nếu xảy ra là trả lời thiếu 1 phần, không phải sai hoặc
+treo.
+
 ### Known limitation — refusal-detection heuristic is regex/keyword-based, not semantic
 
 `refused_appropriately` in evals/run_evals.py checks the agent's answer against a fixed list
