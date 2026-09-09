@@ -21,6 +21,16 @@ from agent.agent import Agent
 CASES_PATH = Path("evals/cases.jsonl")
 RESULTS_DIR = Path("evals/results")
 
+# Dataset riêng cho case category "turbine_qa" — KHÔNG load chung DatasetManager với
+# tetouan_clean.csv (xem main()): nếu chung 1 manager có >=2 dataset, guard chống gọi
+# tool mơ hồ (agent/turbine_tool_wrappers.py::resolve_power_wind_columns) sẽ đòi hỏi
+# MỌI case cũ (data_simple/group_compare/...) cũng phải truyền dataset_name tường minh
+# dù trước giờ không cần — rủi ro phá case cũ không đáng, tách riêng an toàn hơn. File
+# CSV không git-track (xem .gitignore) — nếu máy chạy eval chưa copy file này, các case
+# turbine_qa được SKIP rõ ràng (không đếm vào total), không phải lỗi.
+TURBINE_GT1_PATH = Path("data/wind_turbine/data1/his_data_GT1.csv")
+TURBINE_GT1_NAME = "his_data_GT1"
+
 # Heuristic đơn giản để nhận diện câu trả lời từ chối/báo không có thông tin.
 # Đây là cách chấm điểm gần đúng bằng regex, không phải LLM-as-judge — chấp nhận
 # cho V1, có thể bỏ sót vài cách diễn đạt từ chối khác lạ (xem Known Limitations
@@ -172,6 +182,16 @@ def evaluate_case(agent: Agent, case: dict) -> dict:
 
     passed = all(checks.values())
 
+    # tool_selection_correctness — metric CỘNG THÊM, độc lập với checks/passed ở trên
+    # (KHÔNG ảnh hưởng content_ok/citation_correct hiện có). Field "expected_tool"
+    # (SỐ ÍT) khác "expected_tools" (số nhiều, dùng cho checks["tools_ok"] ở trên) —
+    # cố ý tách riêng vì mục đích khác nhau: "expected_tools" là ĐIỀU KIỆN PASS/FAIL
+    # case, còn "expected_tool" chỉ là accuracy chọn tool để BÁO CÁO, không quyết định
+    # pass/fail case đó. Chấp nhận expected_tool nằm BẤT KỲ ĐÂU trong tool_names (agent
+    # có thể chủ động gọi get_dataset_summary trước) — không bắt buộc là tool đầu tiên.
+    expected_tool = case.get("expected_tool")
+    tool_selection_correct = (expected_tool in tool_names) if expected_tool else None
+
     return {
         "id": case["id"],
         "category": case["category"],
@@ -180,6 +200,8 @@ def evaluate_case(agent: Agent, case: dict) -> dict:
         "checks": checks,
         "answer": answer,
         "tool_names": tool_names,
+        "expected_tool": expected_tool,
+        "tool_selection_correct": tool_selection_correct,
         "iterations": result["iterations"],
         "latency_ms": result["latency_ms"],
         "estimated_cost_usd": result["estimated_cost_usd"],
@@ -194,17 +216,38 @@ def main():
     manager = DatasetManager()
     manager.load_csv("data/processed/tetouan_clean.csv")
 
+    turbine_manager = None
+    if TURBINE_GT1_PATH.exists():
+        turbine_manager = DatasetManager()
+        turbine_manager.load_csv(str(TURBINE_GT1_PATH), name=TURBINE_GT1_NAME)
+    else:
+        n_turbine_cases = sum(1 for c in cases if c["category"] == "turbine_qa")
+        if n_turbine_cases:
+            print(f"⚠️  Không tìm thấy {TURBINE_GT1_PATH} (file không git-track) — "
+                  f"SKIP {n_turbine_cases} case turbine_qa.\n")
+
     all_results = []
+    skipped_turbine_cases = []
     for i, case in enumerate(cases, start=1):
         print(f"[{i}/{len(cases)}] {case['category']}: {case['question'][:60]}...")
-        agent = Agent(manager)  # agent mới mỗi câu, tránh lịch sử hội thoại lẫn lộn giữa các case
+
+        if case["category"] == "turbine_qa" and turbine_manager is None:
+            skipped_turbine_cases.append(case["id"])
+            print("    -> SKIP (thiếu dữ liệu turbine gió trên máy này)")
+            continue
+
+        # agent mới mỗi câu, tránh lịch sử hội thoại lẫn lộn giữa các case. Case turbine_qa
+        # dùng manager RIÊNG chỉ chứa his_data_GT1 — xem giải thích ở TURBINE_GT1_PATH.
+        active_manager = turbine_manager if case["category"] == "turbine_qa" else manager
+        agent = Agent(active_manager)
         try:
             r = evaluate_case(agent, case)
         except Exception as e:
             r = {
                 "id": case["id"], "category": case["category"], "question": case["question"],
                 "passed": False, "checks": {"exception": str(e)}, "answer": None,
-                "tool_names": [], "iterations": None, "latency_ms": None, "estimated_cost_usd": None,
+                "tool_names": [], "expected_tool": case.get("expected_tool"), "tool_selection_correct": None,
+                "iterations": None, "latency_ms": None, "estimated_cost_usd": None,
                 "retrieval": None,
             }
         all_results.append(r)
@@ -224,6 +267,30 @@ def main():
     total_cost = sum(r["estimated_cost_usd"] or 0 for r in all_results)
     latencies = [r["latency_ms"] for r in all_results if r["latency_ms"] is not None]
     avg_latency = sum(latencies) / len(latencies) if latencies else 0
+
+    # --- tool_selection_correctness — metric CỘNG THÊM, độc lập với accuracy/checks ---
+    tool_selection_cases = [r for r in all_results if r.get("expected_tool")]
+    n_tool_selection = len(tool_selection_cases)
+    if n_tool_selection:
+        tool_selection_rate = sum(
+            1 for r in tool_selection_cases if r["tool_selection_correct"]
+        ) / n_tool_selection
+    else:
+        tool_selection_rate = None
+
+    tool_selection_summary = {
+        "n_cases_with_expected_tool": n_tool_selection,
+        "rate": round(tool_selection_rate, 4) if tool_selection_rate is not None else None,
+        "per_case": [
+            {
+                "id": r["id"],
+                "expected_tool": r["expected_tool"],
+                "tool_names": r["tool_names"],
+                "correct": r["tool_selection_correct"],
+            }
+            for r in tool_selection_cases
+        ],
+    }
 
     # --- Retrieval metrics (chỉ tính trên case có gold_evidence, xem Bước 1-3) ---
     retrieval_results = [r for r in all_results if r.get("retrieval") is not None]
@@ -280,6 +347,8 @@ def main():
         },  # alias theo đúng tên field rubric yêu cầu ("categories"), giữ "by_category" cũ song song
         "total_cost_usd": round(total_cost, 6),
         "average_latency_ms": round(avg_latency, 1),
+        "tool_selection_correctness": tool_selection_summary,
+        "skipped_turbine_cases": skipped_turbine_cases,
     }
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -315,6 +384,24 @@ def main():
     print(f"Recall@10: {recall_at_10*100:.1f}%")
     print(f"MRR:       {mrr:.4f}")
     print(f"Citation correctness: {citation_correctness_rate*100:.1f}%")
+
+    print("\n" + "-" * 60)
+    print(f"TOOL SELECTION CORRECTNESS ({n_tool_selection} case có field expected_tool)")
+    print("-" * 60)
+    if n_tool_selection:
+        print(f"Đúng tool: {sum(1 for r in tool_selection_cases if r['tool_selection_correct'])}/{n_tool_selection} "
+              f"({tool_selection_rate*100:.1f}%)")
+        wrong = [r for r in tool_selection_cases if not r["tool_selection_correct"]]
+        if wrong:
+            print("Case chọn sai tool:")
+            for r in wrong:
+                print(f"  {r['id']}: expected={r['expected_tool']}, thực tế gọi={r['tool_names']}")
+    else:
+        print("(Không có case nào có field expected_tool)")
+
+    if skipped_turbine_cases:
+        print(f"\n⚠️  Đã SKIP {len(skipped_turbine_cases)} case turbine_qa (thiếu dữ liệu turbine gió trên máy này): "
+              f"{skipped_turbine_cases}")
 
     print(f"\nChi tiết: evals/results/eval_detail_{ts}.json")
     print(f"Tổng kết: evals/results/eval_summary_{ts}.json")
