@@ -1,0 +1,329 @@
+{
+  "timestamp": "2026-09-09T09:59:45.120835+00:00",
+  "total_cases": 58,
+  "passed": 52,
+  "overall_accuracy": 0.8966,
+  "accuracy": 0.8966,
+  "retrieval": {
+    "n_cases_with_gold_evidence": 21,
+    "recall_at_5": 0.9524,
+    "recall_at_10": 0.9524,
+    "mrr": 0.6341,
+    "citation_correctness_rate": 0.7619,
+    "per_case": [
+      {
+        "id": "kb_001",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 1,
+        "citation_correct": true
+      },
+      {
+        "id": "kb_002",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 2,
+        "citation_correct": false
+      },
+      {
+        "id": "kb_003",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 2,
+        "citation_correct": false
+      },
+      {
+        "id": "kb_004",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 5,
+        "citation_correct": false
+      },
+      {
+        "id": "kb_005",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 2,
+        "citation_correct": true
+      },
+      {
+        "id": "kb_006",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 2,
+        "citation_correct": true
+      },
+      {
+        "id": "kb_007",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 1,
+        "citation_correct": true
+      },
+      {
+        "id": "kb_008",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 1,
+        "citation_correct": true
+      },
+      {
+        "id": "kb_009",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 1,
+        "citation_correct": true
+      },
+      {
+        "id": "kb_010",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 3,
+        "citation_correct": true
+      },
+      {
+        "id": "kb_011",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 2,
+        "citation_correct": true
+      },
+      {
+        "id": "kb_012",
+        "recall_5": false,
+        "recall_10": false,
+        "rank": null,
+        "citation_correct": false
+      },
+      {
+        "id": "kb_013",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 1,
+        "citation_correct": true
+      },
+      {
+        "id": "kb_014",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 3,
+        "citation_correct": true
+      },
+      {
+        "id": "both_001",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 1,
+        "citation_correct": true
+      },
+      {
+        "id": "both_002",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 1,
+        "citation_correct": true
+      },
+      {
+        "id": "both_003",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 5,
+        "citation_correct": false
+      },
+      {
+        "id": "both_004",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 2,
+        "citation_correct": true
+      },
+      {
+        "id": "both_005",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 1,
+        "citation_correct": true
+      },
+      {
+        "id": "both_006",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 1,
+        "citation_correct": true
+      },
+      {
+        "id": "both_007",
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 4,
+        "citation_correct": true
+      }
+    ],
+    "by_category": {
+      "both": {
+        "n_cases": 7,
+        "recall_at_5": 1.0,
+        "recall_at_10": 1.0,
+        "mrr": 0.7071,
+        "citation_correctness_rate": 0.8571
+      },
+      "kb_qa": {
+        "n_cases": 14,
+        "recall_at_5": 0.9286,
+        "recall_at_10": 0.9286,
+        "mrr": 0.5976,
+        "citation_correctness_rate": 0.7143
+      }
+    }
+  },
+  "by_category": {
+    "data_simple": {
+      "total": 10,
+      "passed": 8,
+      "accuracy": 0.8
+    },
+    "group_compare": {
+      "total": 8,
+      "passed": 6,
+      "accuracy": 0.75
+    },
+    "multi_step": {
+      "total": 5,
+      "passed": 5,
+      "accuracy": 1.0
+    },
+    "kb_qa": {
+      "total": 14,
+      "passed": 13,
+      "accuracy": 0.9286
+    },
+    "both": {
+      "total": 7,
+      "passed": 7,
+      "accuracy": 1.0
+    },
+    "error_handling": {
+      "total": 5,
+      "passed": 5,
+      "accuracy": 1.0
+    },
+    "prompt_injection": {
+      "total": 3,
+      "passed": 3,
+      "accuracy": 1.0
+    },
+    "parametric_override": {
+      "total": 1,
+      "passed": 1,
+      "accuracy": 1.0
+    },
+    "turbine_qa": {
+      "total": 5,
+      "passed": 4,
+      "accuracy": 0.8
+    }
+  },
+  "categories": {
+    "data_simple": {
+      "total": 10,
+      "passed": 8,
+      "accuracy": 0.8
+    },
+    "group_compare": {
+      "total": 8,
+      "passed": 6,
+      "accuracy": 0.75
+    },
+    "multi_step": {
+      "total": 5,
+      "passed": 5,
+      "accuracy": 1.0
+    },
+    "kb_qa": {
+      "total": 14,
+      "passed": 13,
+      "accuracy": 0.9286
+    },
+    "both": {
+      "total": 7,
+      "passed": 7,
+      "accuracy": 1.0
+    },
+    "error_handling": {
+      "total": 5,
+      "passed": 5,
+      "accuracy": 1.0
+    },
+    "prompt_injection": {
+      "total": 3,
+      "passed": 3,
+      "accuracy": 1.0
+    },
+    "parametric_override": {
+      "total": 1,
+      "passed": 1,
+      "accuracy": 1.0
+    },
+    "turbine_qa": {
+      "total": 5,
+      "passed": 4,
+      "accuracy": 0.8
+    }
+  },
+  "total_cost_usd": 8e-06,
+  "average_latency_ms": 8990.1,
+  "tool_selection_correctness": {
+    "n_cases_with_expected_tool": 5,
+    "rate": 1.0,
+    "per_case": [
+      {
+        "id": "turbine_001",
+        "expected_tool": "clean_missing_values",
+        "tool_names": [
+          "get_dataset_summary",
+          "clean_missing_values"
+        ],
+        "correct": true
+      },
+      {
+        "id": "turbine_002",
+        "expected_tool": "classify_turbine_status",
+        "tool_names": [
+          "get_dataset_summary",
+          "classify_turbine_status"
+        ],
+        "correct": true
+      },
+      {
+        "id": "turbine_003",
+        "expected_tool": "diagnose_theoretical_power_deviation",
+        "tool_names": [
+          "get_dataset_summary",
+          "diagnose_theoretical_power_deviation"
+        ],
+        "correct": true
+      },
+      {
+        "id": "turbine_004",
+        "expected_tool": "predict_power",
+        "tool_names": [
+          "get_dataset_summary",
+          "predict_power"
+        ],
+        "correct": true
+      },
+      {
+        "id": "turbine_005",
+        "expected_tool": "group_anomaly_windows",
+        "tool_names": [
+          "get_dataset_summary",
+          "group_anomaly_windows",
+          "group_anomaly_windows",
+          "group_anomaly_windows"
+        ],
+        "correct": true
+      }
+    ]
+  },
+  "skipped_turbine_cases": []
+}
