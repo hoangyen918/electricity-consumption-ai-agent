@@ -12,9 +12,11 @@ import streamlit as st
 from tools.dataset_manager import DatasetManager
 from tools.data_cleaning_tools import clean_missing_values, detect_duplicates
 from tools.turbine_diagnostic_tools import (
-    diagnose_theoretical_power_deviation, OPST_LABELS,
-    calculate_turbine_kpis, estimate_power_curve, classify_turbine_status,
-    _detect_site, _power_wind_columns,
+    diagnose_theoretical_power_deviation, OPST_LABELS, calculate_turbine_kpis,
+    _detect_site, _power_wind_columns, CLASSIFICATION_LABELS,
+)
+from agent.turbine_tool_wrappers import (
+    group_anomaly_windows_for_agent, get_or_compute_power_curve, get_or_compute_classification,
 )
 from agent.agent import Agent
 from config.settings import SETTINGS
@@ -680,18 +682,18 @@ def _render_kpi_summary_tab():
         "GT1.Common.TheoActiveW" if site == "site1" and "GT1.Common.TheoActiveW" in df.columns else None
     )
 
+    # Dung get_or_compute_power_curve/get_or_compute_classification (TU agent/
+    # turbine_tool_wrappers.py) — CUNG cache voi tab Power Curve/Timeline, thay vi goi
+    # thang estimate_power_curve()/classify_turbine_status() (truoc day khien 3 tab
+    # nay KHONG chia se cache, moi tab tu tinh lai rieng du CUNG dataset/cot/bin_width).
     with st.spinner("Đang tính power curve + phân loại trạng thái (lần đầu có thể mất vài giây)..."):
-        curve_result = estimate_power_curve(
-            manager, power_column=power_column, wind_speed_column=wind_speed_column,
-            dataset_name=selected, bin_width=1.0,
-        )
+        curve_result = get_or_compute_power_curve(manager, selected, power_column, wind_speed_column, 1.0)
         if not curve_result["ok"]:
             st.error(curve_result["error"])
             return
 
-        classify_result = classify_turbine_status(
-            manager, power_column=power_column, wind_speed_column=wind_speed_column,
-            power_curve=curve_result["data"], dataset_name=selected, setpoint_column=setpoint_column,
+        classify_result = get_or_compute_classification(
+            manager, selected, power_column, wind_speed_column, setpoint_column, 1.0,
         )
         if not classify_result["ok"]:
             st.error(classify_result["error"])
@@ -718,6 +720,9 @@ def _render_kpi_summary_tab():
     col4.metric("TBA (%)", f"{data['tba_pct']:.2f}%" if data["tba_pct"] is not None else "N/A")
     col5.metric("PBA (%)", f"{data['pba_pct']:.2f}%" if data["pba_pct"] is not None else "N/A")
 
+    if data.get("tba_note"):
+        st.caption(f"ℹ️ {data['tba_note']}")
+
     excluded_note = (
         f" ({data['n_rows_excluded_no_reachable_estimate']:,} dòng bị loại do thiếu reachable estimate)"
         if data["n_rows_excluded_no_reachable_estimate"] else ""
@@ -725,6 +730,202 @@ def _render_kpi_summary_tab():
     st.caption(
         f"Rated power: {data['rated_power_kw']:,.1f} kW · Reachable energy: {data['reachable_mwh']:,.1f} MWh · "
         f"Interval: {data['interval_minutes']:.1f} phút · {data['n_rows_used']:,} dòng dùng để tính{excluded_note}"
+    )
+
+
+# Mau co dinh cho 8 nhan Meteodyn — dung chung cho ca Power Curve (scatter) va Timeline
+# (Gantt bar). Normal mau xam nhat lam nen (chiem da so diem, khong can noi bat); cac
+# nhan bat thuong dung mau tuoi/de phan biet. "Measurement Error" xam DAM HON Normal
+# (khac han, tranh nham voi nen) vi day la loi du lieu, khong phai trang thai van hanh
+# that.
+_CLASSIFICATION_STATUS_COLORS = {
+    "Normal": "#BEBEBE",
+    "Curtailment": "#1f77b4",
+    "Partial Curtailment": "#17becf",
+    "Under Production": "#ff7f0e",
+    "Over Production": "#9467bd",
+    "Stop": "#d62728",
+    "Partial Stop": "#e377c2",
+    "Measurement Error": "#7f7f7f",
+}
+
+_POWER_CURVE_SAMPLE_SIZE = 8000
+
+
+def _render_power_curve_tab():
+    st.subheader("📈 Power Curve — Wind Speed vs Power, tô màu theo trạng thái")
+    manager = _get_wind_turbine_manager()
+    selected = st.selectbox("Chọn dataset:", list(WIND_TURBINE_DATASET_PATHS.keys()), key="powercurve_dataset_select")
+
+    if not _ensure_wind_turbine_dataset_loaded(manager, selected):
+        return
+
+    df = manager.get_dataframe(selected)
+    site = _detect_site(df)
+    if site is None:
+        st.error("Không nhận diện được cấu trúc turbine gió cho dataset này.")
+        return
+
+    power_column, wind_speed_column = _power_wind_columns(site)
+    setpoint_column = "GT1.SP.ActualSPP" if site == "site1" else None
+
+    # Dung get_or_compute_power_curve/get_or_compute_classification (TU agent/
+    # turbine_tool_wrappers.py, CUNG cache tren instance DatasetManager ma
+    # group_anomaly_windows_for_agent — tab Timeline — dung) THAY VI goi thang
+    # estimate_power_curve()/classify_turbine_status() — phat hien that qua AppTest:
+    # goi truc tiep (khong cache) khien MOI lan Streamlit rerun (vd doi widget o BAT
+    # KY tab nao, vi st.tabs() chay lai TOAN BO than cua ca 5 tab) deu tinh lai
+    # classify_turbine_status TU DAU cho dataset dang chon o tab nay — cong don voi
+    # cac tab nang khac (KPI Summary, Timeline) gay timeout that (>180s) khi nhieu tab
+    # dang chon dataset lon khac nhau cung luc. Dung ham cache chung -> neu tab khac
+    # (vd Timeline) da tinh SAN cho DUNG dataset/cot/bin_width nay, tab nay TAI DUNG
+    # ngay, khong tinh lai.
+    with st.spinner("Đang tính power curve + phân loại trạng thái (lần đầu có thể mất vài giây)..."):
+        curve_result = get_or_compute_power_curve(manager, selected, power_column, wind_speed_column, 1.0)
+        if not curve_result["ok"]:
+            st.error(curve_result["error"])
+            return
+
+        classify_result = get_or_compute_classification(
+            manager, selected, power_column, wind_speed_column, setpoint_column, 1.0,
+        )
+        if not classify_result["ok"]:
+            st.error(classify_result["error"])
+            return
+
+    # classification la {row_index: label} (da doc ky code that, khong doan) — align
+    # voi df.index qua reindex, drop cac dong khong co nhan (khong nen xay ra thuc te
+    # vi classify_turbine_status() gan nhan cho MOI dong, phong ngua thoi).
+    labels = pd.Series(classify_result["data"]["classification"]).reindex(df.index)
+    plot_df = pd.DataFrame({
+        "wind_speed": df[wind_speed_column],
+        "power": df[power_column],
+        "label": labels,
+    }).dropna(subset=["label"])
+
+    total_points = len(plot_df)
+    if total_points > _POWER_CURVE_SAMPLE_SIZE:
+        plot_df = plot_df.sample(n=_POWER_CURVE_SAMPLE_SIZE, random_state=42)
+        st.caption(
+            f"Hiển thị mẫu ngẫu nhiên {_POWER_CURVE_SAMPLE_SIZE:,} điểm trên tổng "
+            f"{total_points:,} điểm (tránh render chậm với dataset lớn)."
+        )
+
+    # Ve Normal TRUOC (nen), cac nhan bat thuong SAU — de nhan bat thuong (thieu so)
+    # khong bi che khuat boi khoi diem Normal (da so).
+    labels_present = set(plot_df["label"].unique())
+    ordered_labels = [l for l in CLASSIFICATION_LABELS if l in labels_present]
+    ordered_labels.sort(key=lambda l: 0 if l == "Normal" else 1)
+
+    fig = go.Figure()
+    for label in ordered_labels:
+        subset = plot_df[plot_df["label"] == label]
+        fig.add_trace(go.Scatter(
+            x=subset["wind_speed"], y=subset["power"], mode="markers", name=label,
+            marker=dict(size=4, color=_CLASSIFICATION_STATUS_COLORS.get(label, "#000000")),
+            opacity=0.6,
+        ))
+
+    # Duong power curve (median moi bin) ve DE LEN lam duong tham chieu — line, khong
+    # phai marker, de phan biet ro voi cac diem du lieu that ben duoi.
+    curve_bins = curve_result["data"]["power_curve"]
+    curve_x = [b["wind_speed_bin_center"] for b in curve_bins if b["median_power"] is not None]
+    curve_y = [b["median_power"] for b in curve_bins if b["median_power"] is not None]
+    fig.add_trace(go.Scatter(
+        x=curve_x, y=curve_y, mode="lines", name="Power Curve (median)",
+        line=dict(color="black", width=2),
+    ))
+
+    fig.update_layout(
+        xaxis_title="Wind Speed (m/s)", yaxis_title=f"Power ({power_column})",
+        title=f"Power Curve — {selected}", legend_title="Trạng thái",
+    )
+    st.plotly_chart(fig, width="stretch")
+
+
+def _render_timeline_tab():
+    st.subheader("🕐 Timeline các khoảng thời gian bất thường")
+    manager = _get_wind_turbine_manager()
+    selected = st.selectbox("Chọn dataset:", list(WIND_TURBINE_DATASET_PATHS.keys()), key="timeline_dataset_select")
+
+    if not _ensure_wind_turbine_dataset_loaded(manager, selected):
+        return
+
+    df = manager.get_dataframe(selected)
+    site = _detect_site(df)
+    if site is None:
+        st.error("Không nhận diện được cấu trúc turbine gió cho dataset này.")
+        return
+    setpoint_column = "GT1.SP.ActualSPP" if site == "site1" else None
+
+    # Mac dinh 30 ngay GAN NHAT theo du lieu THAT cua dataset (khong phai hom nay) —
+    # tranh xu ly toan bo 2-5 nam cung luc (cham + qua nhieu window de doc).
+    data_min = df["datetime"].min().date()
+    data_max = df["datetime"].max().date()
+    default_start = max(data_min, data_max - pd.Timedelta(days=30))
+    # key PHAI rieng theo TUNG dataset (khong dung 1 key co dinh chung) — phat hien that
+    # qua AppTest: cac dataset co khoang ngay HOAN TOAN khac nhau (GT1: 2023-2025, WT1:
+    # 2012-2016), neu dung chung 1 key, widget giu lai gia tri CU (tu dataset truoc) khi
+    # doi dataset, gia tri do co the nam NGOAI min_value/max_value MOI -> Streamlit xu
+    # ly sai trang thai, gay treo (>180s) khi test qua AppTest (dashboard day du 5 tab).
+    date_range = st.date_input(
+        "Khoảng thời gian:", value=(default_start, data_max),
+        min_value=data_min, max_value=data_max, key=f"timeline_date_range_{selected}",
+    )
+    if len(date_range) != 2:
+        st.info("Chọn đủ 2 mốc ngày (bắt đầu và kết thúc).")
+        return
+    start_date, end_date = date_range
+    if start_date > end_date:
+        st.error("Ngày bắt đầu phải trước ngày kết thúc.")
+        return
+
+    with st.spinner("Đang phân loại trạng thái + gộp các khoảng thời gian bất thường..."):
+        # group_anomaly_windows_for_agent (KHÔNG phải group_anomaly_windows gốc) — CHỈ
+        # bản wrapper này có start_date/end_date (fix cap-window tuần trước, xem
+        # agent/turbine_tool_wrappers.py). BẮT BUỘC truyền start_date/end_date ở đây vì
+        # đã giới hạn khoảng thời gian — nếu không, cap mặc định 30-khoảng-dài-nhất-TOÀN-
+        # BỘ-DATASET sẽ áp dụng SAI phạm vi và có thể bỏ sót/trộn window ngoài khoảng.
+        windows_result = group_anomaly_windows_for_agent(
+            manager, dataset_name=selected, timestamp_column="datetime",
+            power_column=None, wind_speed_column=None, setpoint_column=setpoint_column,
+            bin_width=1.0, min_consecutive_points=3, exclude_labels=None,
+            start_date=str(start_date), end_date=str(end_date),
+        )
+    if not windows_result["ok"]:
+        st.error(windows_result["error"])
+        return
+
+    windows = windows_result["data"]["windows"]
+    if not windows:
+        st.info(f"Không có khoảng thời gian bất thường nào trong {start_date} → {end_date} (toàn bộ Normal).")
+        return
+
+    timeline_df = pd.DataFrame(windows)
+    timeline_df["start_time"] = pd.to_datetime(timeline_df["start_time"])
+    timeline_df["end_time"] = pd.to_datetime(timeline_df["end_time"])
+
+    fig = px.timeline(
+        timeline_df, x_start="start_time", x_end="end_time", y="label", color="label",
+        color_discrete_map=_CLASSIFICATION_STATUS_COLORS,
+        hover_data=["n_points", "duration"],
+    )
+    fig.update_yaxes(autorange="reversed")
+    fig.update_layout(
+        title=f"Timeline bất thường — {selected} ({start_date} → {end_date})",
+        xaxis_title="Thời gian", legend_title="Trạng thái",
+    )
+    st.plotly_chart(fig, width="stretch")
+
+    truncated_note = ""
+    if windows_result["data"].get("windows_truncated"):
+        truncated_note = (
+            f" (đã cắt bớt — chỉ hiển thị {len(windows)} khoảng DÀI NHẤT trong tổng "
+            f"{windows_result['data']['windows_total_found']} khoảng tìm được trong khoảng thời gian này)"
+        )
+    st.caption(
+        f"{len(windows)} khoảng thời gian bất thường (đã loại nhãn 'Normal', chỉ gộp "
+        f"khoảng có ≥3 điểm liên tiếp cùng nhãn){truncated_note}."
     )
 
 
@@ -736,9 +937,9 @@ def render_wind_turbine_dashboard():
     with tab1:
         _render_overview_tab()
     with tab2:
-        st.info("⏳ Cần classify_turbine_status (Phase 3 chiều) — chưa sẵn sàng")
+        _render_power_curve_tab()
     with tab3:
-        st.info("⏳ Cần classification + persistence rule — chưa sẵn sàng")
+        _render_timeline_tab()
     with tab4:
         _render_diagnostic_tab()
     with tab5:
