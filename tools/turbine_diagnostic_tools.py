@@ -1259,3 +1259,194 @@ def predict_power(
         })
     except Exception as exc:
         return failure(str(exc))
+
+
+# Nhan bieu thi turbine THUC SU DUNG (khong san xuat) trong 8 nhan Meteodyn — DUY NHAT
+# 2 nhan nay co nghia "cong suat gan 0" theo dinh nghia rule (xem CLASSIFICATION_LABELS
+# va docstring classify_turbine_status() o tren). "Measurement Error" KHONG duoc xep
+# vao available/unavailable — du lieu cam bien loi nen KHONG BIET turbine thuc su chay
+# hay dung, dua vao mau so se suy dien sai tu du lieu khong dang tin (loai hoan toan
+# khoi tinh TBA, khong tinh la available lan unavailable). Day la GIA DINH HEURISTIC
+# cua module nay — KHONG phai cong thuc trich tu tai lieu PO024 (da xac nhan qua tra
+# cuu KB that: PO024 chi liet ke 6 nhan phan loai dung trong methodology, KHONG neu ro
+# quy tac nhan nao tinh la "available" cho TBA/PBA).
+_TBA_UNAVAILABLE_LABELS = {"Stop", "Partial Stop"}
+_TBA_EXCLUDED_LABELS = {"Measurement Error"}
+
+
+def calculate_turbine_kpis(
+    manager: DatasetManager,
+    dataset_name: str,
+    power_column: str,
+    wind_speed_column: str,
+    classification: dict,
+    power_curve: dict | None = None,
+    theoretical_power_column: str | None = None,
+    interval_minutes: float | None = None,
+) -> dict:
+    """
+    Tinh KPI theo dung format bang PO024 (Production/Losses/Capacity Factor/TBA/PBA).
+    TAI DUNG HOAN TOAN classification (tu classify_turbine_status(), KHONG phan loai
+    lai) va power_curve (tu estimate_power_curve(), KHONG uoc luong lai) — day chi la
+    lop TONG HOP tren ket qua 2 tool do da co san.
+
+    2 cach tinh "reachable energy" (san luong LE RA dat duoc neu khong co ton that),
+    tuy site:
+    - method="direct_theoretical" (Site 1, GT1.Common.TheoActiveW co san): dung TRUC
+      TIEP cot ly thuyet, KHONG can power_curve. Truyen theoretical_power_column.
+    - method="estimated_power_curve" (Site 2, khong co cot ly thuyet): uoc luong cong
+      suat "le ra dat duoc" tai moi diem bang noi suy tuyen tinh giua cac median_power
+      trong power_curve — TAI DUNG _power_curve_interpolate() da co san (dung boi
+      predict_power() lam baseline), KHONG viet lai logic binning.
+
+    Neu CA HAI deu duoc truyen (vd goi tay muon so sanh), uu tien theoretical_power_column
+    (do chinh xac hon uoc luong tu power curve).
+
+    GIA DINH HEURISTIC (can biet truoc khi tin ket qua — xem _TBA_UNAVAILABLE_LABELS o
+    tren de biet ro day la quyet dinh cua module nay, KHONG phai trich tu PO024):
+    - power_column/theoretical_power_column don vi kW (da verify that qua du lieu GT1/
+      WT1: GT1.Grid.totW max~4525, GT1.Common.TheoActiveW max~4517 hop ly cho turbine
+      ~4.5MW; WT1.ACTIVE_POWER max~2051 hop ly turbine ~2MW-class — KHONG phai MW).
+    - TBA = % thoi gian KHONG o nhan "Stop"/"Partial Stop" (2 nhan duy nhat bieu thi
+      cong suat gan 0 do turbine dung). "Measurement Error" (du lieu cam bien loi, KHONG
+      biet turbine thuc su chay hay dung) bi LOAI KHOI mau so hoan toan. Curtailment/
+      Partial Curtailment tinh la AVAILABLE (turbine co kha nang chay, chi bi gioi han
+      theo lenh dieu do, khong phai loi turbine).
+    - rated_power_kw: neu co power_curve, dung max(median_power) qua cac bin (CUNG cong
+      thuc classify_turbine_status() dung de uoc luong rated_power_estimate — tai dung
+      y tuong, khong tinh khac di). Neu KHONG co power_curve (chi co
+      theoretical_power_column, method=direct), fallback max(power_column)*1.02 (bien
+      an toan 2% — tranh danh gia capacity factor cao gia tao do rated_power uoc luong
+      thap hon that).
+    - production_mwh/reachable_mwh CHI tinh tren cac dong co reachable-power hop le (vd
+      wind_speed roi vao 1 bin co du lieu that trong power_curve) — xem
+      n_rows_excluded_no_reachable_estimate de biet co bao nhieu dong bi loai, neu con
+      so nay lon so voi tong so dong thi capacity_factor_pct co the bi UNDERESTIMATE
+      nhe (production thuc te cao hon phan da tinh, do vai dong bi loai khoi tong).
+
+    Tra ve: production_mwh, reachable_mwh, losses_pct, capacity_factor_pct, tba_pct,
+    pba_pct, rated_power_kw, method, interval_minutes, n_rows_used,
+    n_rows_excluded_no_reachable_estimate.
+    """
+    try:
+        df = manager.get_dataframe(dataset_name)
+        if df is None:
+            return failure(_dataset_not_found(manager, dataset_name))
+
+        for col in (power_column, wind_speed_column):
+            col_error = _validate_column(manager, col, dataset_name)
+            if col_error:
+                return failure(col_error)
+
+        if theoretical_power_column is not None:
+            col_error = _validate_column(manager, theoretical_power_column, dataset_name)
+            if col_error:
+                return failure(col_error)
+
+        if "datetime" not in df.columns:
+            return failure(
+                "Dataset không có cột 'datetime' đã derive (xem "
+                "DatasetManager.derive_time_columns) — không thể tính interval/Production "
+                "theo thời gian."
+            )
+
+        if interval_minutes is None:
+            diffs = df["datetime"].diff().dropna()
+            mode_result = diffs.mode()
+            if len(mode_result) == 0:
+                return failure(
+                    "Không suy ra được interval từ cột datetime (dữ liệu quá ít hoặc không "
+                    "có bản ghi liên tiếp)."
+                )
+            interval_minutes = mode_result.iloc[0].total_seconds() / 60
+        interval_hours = interval_minutes / 60
+
+        median_lookup = None
+        if power_curve is not None:
+            power_curve_list = power_curve.get("power_curve")
+            bin_width = power_curve.get("bin_width")
+            if not power_curve_list or not bin_width:
+                return failure(
+                    "power_curve không hợp lệ — cần truyền field 'data' từ kết quả "
+                    "estimate_power_curve() (có 'power_curve' và 'bin_width'), không phải "
+                    "toàn bộ dict {'ok':..,'data':..}."
+                )
+            median_lookup = pd.Series({b["wind_speed_bin_center"]: b["median_power"] for b in power_curve_list})
+
+        if theoretical_power_column is not None:
+            method = "direct_theoretical"
+            reachable_per_row = df[theoretical_power_column].astype(float)
+        elif median_lookup is not None:
+            method = "estimated_power_curve"
+            try:
+                interpolated = _power_curve_interpolate(power_curve, df[wind_speed_column].astype(float).values)
+            except ValueError as exc:
+                return failure(str(exc))
+            reachable_per_row = pd.Series(interpolated, index=df.index)
+        else:
+            return failure(
+                "Cần truyền theoretical_power_column (Site 1) HOẶC power_curve (Site 2) để "
+                "tính reachable energy — không có cả 2 thì không thể ước lượng tổn thất/PBA."
+            )
+
+        actual_per_row = df[power_column].astype(float)
+
+        valid_mask = reachable_per_row.notna() & actual_per_row.notna()
+        n_rows_used = int(valid_mask.sum())
+        n_rows_excluded = int((~valid_mask).sum())
+        if n_rows_used == 0:
+            return failure("Không có dòng nào có đủ dữ liệu (power + reachable) để tính KPI.")
+
+        actual_valid = actual_per_row[valid_mask]
+        reachable_valid = reachable_per_row[valid_mask]
+
+        # kWh = kW * gio, /1000 -> MWh. Gia tri am (parasitic load, xem module docstring)
+        # GIU NGUYEN trong tong (khong loc bo) - phan anh dung san luong THUC.
+        production_mwh = float(actual_valid.sum() * interval_hours / 1000)
+        reachable_mwh = float(reachable_valid.sum() * interval_hours / 1000)
+
+        if reachable_mwh > 0:
+            pba_pct = round(production_mwh / reachable_mwh * 100, 4)
+            losses_pct = round(100 - pba_pct, 4)
+        else:
+            pba_pct = None
+            losses_pct = None
+
+        if median_lookup is not None:
+            positive_medians = median_lookup.dropna()
+            positive_medians = positive_medians[positive_medians > 0]
+            rated_power_kw = (
+                float(positive_medians.max()) if len(positive_medians) > 0
+                else float(actual_per_row.max() * 1.02)
+            )
+        else:
+            rated_power_kw = float(actual_per_row.max() * 1.02)
+
+        total_hours = len(df) * interval_hours
+        capacity_factor_pct = (
+            round(production_mwh / (rated_power_kw / 1000 * total_hours) * 100, 4)
+            if rated_power_kw > 0 and total_hours > 0 else None
+        )
+
+        labels = pd.Series(classification)
+        counted = labels[~labels.isin(_TBA_EXCLUDED_LABELS)]
+        tba_pct = (
+            round((~counted.isin(_TBA_UNAVAILABLE_LABELS)).sum() / len(counted) * 100, 4)
+            if len(counted) > 0 else None
+        )
+
+        return success({
+            "production_mwh": round(production_mwh, 4),
+            "reachable_mwh": round(reachable_mwh, 4),
+            "losses_pct": losses_pct,
+            "capacity_factor_pct": capacity_factor_pct,
+            "tba_pct": tba_pct,
+            "pba_pct": pba_pct,
+            "rated_power_kw": round(rated_power_kw, 4),
+            "method": method,
+            "interval_minutes": interval_minutes,
+            "n_rows_used": n_rows_used,
+            "n_rows_excluded_no_reachable_estimate": n_rows_excluded,
+        })
+    except Exception as exc:
+        return failure(str(exc))

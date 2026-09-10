@@ -33,6 +33,7 @@ from tools.turbine_diagnostic_tools import (
     group_anomaly_windows,
     detect_anomalies_ml,
     predict_power,
+    calculate_turbine_kpis,
 )
 
 # Dùng bin_width=1.0 làm mặc định cho LLM (KHÁC mặc định nội bộ của estimate_power_curve()
@@ -298,4 +299,41 @@ def predict_power_for_agent(
         dataset_manager, power_column=power_column, wind_speed_column=wind_speed_column,
         power_curve=curve_result["data"], classification=classification_result["data"]["classification"],
         dataset_name=dataset_name, feature_columns=feature_columns,
+    )
+
+
+def calculate_turbine_kpis_for_agent(
+    dataset_manager: DatasetManager, dataset_name: str | None, power_column: str | None,
+    wind_speed_column: str | None, setpoint_column: str | None,
+    theoretical_power_column: str | None, bin_width: float, interval_minutes: float | None,
+) -> dict:
+    """Tu dong tim theoretical_power_column cho Site 1 (GT1.Common.TheoActiveW) neu LLM
+    khong truyen ro va cot do TON TAI trong dataset — Site 2 khong co cot nay nen se tu
+    dong dung method="estimated_power_curve" qua power_curve. LUON tinh + truyen ca
+    power_curve (du dang dung method direct_theoretical) de calculate_turbine_kpis() lay
+    rated_power_kw tu max(median_power) - CUNG cong thuc classify_turbine_status() dung
+    de uoc luong rated_power_estimate - chinh xac hon fallback max(power)*1.02."""
+    power_column, wind_speed_column, err = resolve_power_wind_columns(dataset_manager, dataset_name, power_column, wind_speed_column)
+    if err:
+        return failure(err)
+
+    classification_result = get_or_compute_classification(dataset_manager, dataset_name, power_column, wind_speed_column, setpoint_column, bin_width)
+    if not classification_result["ok"]:
+        return classification_result
+    power_curve_result = get_or_compute_power_curve(dataset_manager, dataset_name, power_column, wind_speed_column, bin_width)
+    if not power_curve_result["ok"]:
+        return power_curve_result
+
+    if theoretical_power_column is None:
+        df = dataset_manager.get_dataframe(dataset_name)
+        if df is not None and "GT1.Common.TheoActiveW" in df.columns:
+            theoretical_power_column = "GT1.Common.TheoActiveW"
+
+    return calculate_turbine_kpis(
+        dataset_manager, dataset_name=dataset_name, power_column=power_column,
+        wind_speed_column=wind_speed_column,
+        classification=classification_result["data"]["classification"],
+        power_curve=power_curve_result["data"],
+        theoretical_power_column=theoretical_power_column,
+        interval_minutes=interval_minutes,
     )

@@ -497,6 +497,46 @@ PREDICT_POWER_SCHEMA = {
     },
 }
 
+CALCULATE_TURBINE_KPIS_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "calculate_turbine_kpis",
+        "description": (
+            "CHỈ dùng cho dataset turbine gió. Tính các chỉ số KPI tổng hợp theo đúng format "
+            "bảng PO024: Production (MWh, tổng sản lượng thực tế), Losses (%), Capacity Factor "
+            "(%), TBA (Time-Based Availability, % thời gian không ở trạng thái Stop/Partial "
+            "Stop), PBA (Production-Based Availability, %, = production/reachable). Dùng khi "
+            "câu hỏi hỏi về HIỆU SUẤT TỔNG THỂ/KPI/availability của turbine, không phải phân "
+            "loại từng thời điểm hay khoảng thời gian cụ thể (dùng classify_turbine_status/"
+            "group_anomaly_windows cho việc đó). Tool này TỰ ĐỘNG gọi classify_turbine_status/"
+            "estimate_power_curve nội bộ nếu chưa có (cache lại, không tính 2 lần). Site 1 "
+            "(his_data_GT1) tự dùng GT1.Common.TheoActiveW (reachable energy CHÍNH XÁC theo lý "
+            "thuyết); Site 2 (WindFarm04_WT*, không có cột lý thuyết) tự ước lượng reachable "
+            "energy qua power curve (kém chính xác hơn Site 1 — xem field 'method' trong kết "
+            "quả trả về để biết cách nào đã dùng)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "power_column": TURBINE_POWER_COLUMN_PROPERTY,
+                "wind_speed_column": TURBINE_WIND_SPEED_COLUMN_PROPERTY,
+                "setpoint_column": TURBINE_SETPOINT_COLUMN_PROPERTY,
+                "theoretical_power_column": {
+                    "type": "string",
+                    "description": "Tên cột công suất lý thuyết (GT1.Common.TheoActiveW) — CHỈ Site 1 có cột này. Để trống để TỰ NHẬN DIỆN nếu dataset là Site 1; Site 2 luôn để trống (không có cột này, tool tự chuyển sang ước lượng qua power curve).",
+                },
+                "bin_width": TURBINE_BIN_WIDTH_PROPERTY,
+                "interval_minutes": {
+                    "type": "number",
+                    "description": "Khoảng cách thời gian giữa 2 bản ghi liên tiếp (phút). Để trống để TỰ SUY từ cột datetime (khuyến nghị — không cần chỉ định trừ khi biết chắc dataset có interval không đều).",
+                },
+                "dataset_name": DATASET_NAME_PROPERTY,
+            },
+            "required": [],
+        },
+    },
+}
+
 ALL_TOOL_SCHEMAS = [
     GET_DATASET_SUMMARY_SCHEMA,
     AGGREGATE_METRIC_SCHEMA,
@@ -519,4 +559,5 @@ ALL_TOOL_SCHEMAS = [
     GROUP_ANOMALY_WINDOWS_SCHEMA,
     DETECT_ANOMALIES_ML_SCHEMA,
     PREDICT_POWER_SCHEMA,
+    CALCULATE_TURBINE_KPIS_SCHEMA,
 ]

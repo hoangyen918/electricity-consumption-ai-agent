@@ -11,7 +11,11 @@ import streamlit as st
 
 from tools.dataset_manager import DatasetManager
 from tools.data_cleaning_tools import clean_missing_values, detect_duplicates
-from tools.turbine_diagnostic_tools import diagnose_theoretical_power_deviation, OPST_LABELS
+from tools.turbine_diagnostic_tools import (
+    diagnose_theoretical_power_deviation, OPST_LABELS,
+    calculate_turbine_kpis, estimate_power_curve, classify_turbine_status,
+    _detect_site, _power_wind_columns,
+)
 from agent.agent import Agent
 from config.settings import SETTINGS
 from rag.vector_store import count_documents
@@ -656,6 +660,74 @@ def _render_diagnostic_tab():
         )
 
 
+def _render_kpi_summary_tab():
+    st.subheader("📊 KPI Summary — Production / Losses / Capacity Factor / TBA / PBA")
+    manager = _get_wind_turbine_manager()
+    selected = st.selectbox("Chọn dataset:", list(WIND_TURBINE_DATASET_PATHS.keys()), key="kpi_dataset_select")
+
+    if not _ensure_wind_turbine_dataset_loaded(manager, selected):
+        return
+
+    df = manager.get_dataframe(selected)
+    site = _detect_site(df)
+    if site is None:
+        st.error("Không nhận diện được cấu trúc turbine gió (cần cột bắt đầu bằng 'GT1.' hoặc cả 'ACTIVE_POWER'/'WIND_SPEED') cho dataset này.")
+        return
+
+    power_column, wind_speed_column = _power_wind_columns(site)
+    setpoint_column = "GT1.SP.ActualSPP" if site == "site1" else None
+    theoretical_power_column = (
+        "GT1.Common.TheoActiveW" if site == "site1" and "GT1.Common.TheoActiveW" in df.columns else None
+    )
+
+    with st.spinner("Đang tính power curve + phân loại trạng thái (lần đầu có thể mất vài giây)..."):
+        curve_result = estimate_power_curve(
+            manager, power_column=power_column, wind_speed_column=wind_speed_column,
+            dataset_name=selected, bin_width=1.0,
+        )
+        if not curve_result["ok"]:
+            st.error(curve_result["error"])
+            return
+
+        classify_result = classify_turbine_status(
+            manager, power_column=power_column, wind_speed_column=wind_speed_column,
+            power_curve=curve_result["data"], dataset_name=selected, setpoint_column=setpoint_column,
+        )
+        if not classify_result["ok"]:
+            st.error(classify_result["error"])
+            return
+
+        result = calculate_turbine_kpis(
+            manager, dataset_name=selected, power_column=power_column, wind_speed_column=wind_speed_column,
+            classification=classify_result["data"]["classification"], power_curve=curve_result["data"],
+            theoretical_power_column=theoretical_power_column,
+        )
+    if not result["ok"]:
+        st.error(result["error"])
+        return
+
+    data = result["data"]
+    method_label = "Trực tiếp (TheoActiveW)" if data["method"] == "direct_theoretical" else "Ước lượng (power curve)"
+    st.caption(f"Reachable energy: **{method_label}** — Site 1 dùng cột lý thuyết trực tiếp (chính xác hơn), "
+               f"Site 2 ước lượng qua power curve (kém chính xác hơn).")
+
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("Production (MWh)", f"{data['production_mwh']:,.1f}")
+    col2.metric("Losses (%)", f"{data['losses_pct']:.2f}%" if data["losses_pct"] is not None else "N/A")
+    col3.metric("Capacity Factor (%)", f"{data['capacity_factor_pct']:.2f}%" if data["capacity_factor_pct"] is not None else "N/A")
+    col4.metric("TBA (%)", f"{data['tba_pct']:.2f}%" if data["tba_pct"] is not None else "N/A")
+    col5.metric("PBA (%)", f"{data['pba_pct']:.2f}%" if data["pba_pct"] is not None else "N/A")
+
+    excluded_note = (
+        f" ({data['n_rows_excluded_no_reachable_estimate']:,} dòng bị loại do thiếu reachable estimate)"
+        if data["n_rows_excluded_no_reachable_estimate"] else ""
+    )
+    st.caption(
+        f"Rated power: {data['rated_power_kw']:,.1f} kW · Reachable energy: {data['reachable_mwh']:,.1f} MWh · "
+        f"Interval: {data['interval_minutes']:.1f} phút · {data['n_rows_used']:,} dòng dùng để tính{excluded_note}"
+    )
+
+
 def render_wind_turbine_dashboard():
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📋 Tổng quan", "📈 Power Curve", "🕐 Timeline",
@@ -670,7 +742,7 @@ def render_wind_turbine_dashboard():
     with tab4:
         _render_diagnostic_tab()
     with tab5:
-        st.info("⏳ Cần calculate_turbine_kpis (chưa xây) — chưa sẵn sàng")
+        _render_kpi_summary_tab()
 
 
 def render_chat():

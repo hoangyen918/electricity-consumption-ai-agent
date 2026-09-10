@@ -15,6 +15,7 @@ from tools.turbine_diagnostic_tools import (
     group_anomaly_windows,
     detect_anomalies_ml,
     predict_power,
+    calculate_turbine_kpis,
 )
 
 GT1_PATH_REAL = "data/wind_turbine/data1/his_data_GT1.csv"
@@ -1018,3 +1019,172 @@ def test_integration_predict_power_on_real_wt1_uses_xgboost_as_measured():
     assert result["data"]["method_used"] == "xgboost"
     assert result["data"]["metrics"]["rmse"] < result["data"]["baseline_metrics"]["rmse"]
     assert result["data"]["gate_4c"]["wind_speed_rank"] == 1
+
+
+# =============================== calculate_turbine_kpis ===============================
+
+def _kpi_fixture(tmp_path, rows: list[str], header: str = "TimeStamp,POWER,WIND,THEO_POWER") -> DatasetManager:
+    """4 dong, cach nhau 5 phut (khop dinh dang TimeStamp dung Site 1) -- de tu suy interval_minutes=5."""
+    csv_path = tmp_path / "kpi_fixture.csv"
+    csv_path.write_text(header + "\n" + "\n".join(rows) + "\n", encoding="utf-8")
+    m = DatasetManager()
+    m.load_csv(str(csv_path), name="kpi_fixture")
+    return m
+
+
+def test_calculate_turbine_kpis_direct_theoretical_hand_computed(tmp_path):
+    """4 dong 5 phut: power=[1000,800,0,1000] kW, theoretical=1000 kW co dinh, nhan =
+    [Normal,Normal,Stop,Curtailment]. Tinh tay: production=2800kWh-equiv*(5/60)h/1000=
+    0.23333 MWh; reachable=4000*(5/60)/1000=0.33333 MWh; pba=70%, losses=30%;
+    rated_power=max(power)*1.02=1020 (KHONG co power_curve); TBA=3/4 available (chi
+    'Stop' unavailable)=75%."""
+    rows = [
+        "2024-01-01 00:00:00,1000.0,5.5,1000.0",
+        "2024-01-01 00:05:00,800.0,5.5,1000.0",
+        "2024-01-01 00:10:00,0.0,5.5,1000.0",
+        "2024-01-01 00:15:00,1000.0,5.5,1000.0",
+    ]
+    m = _kpi_fixture(tmp_path, rows)
+    classification = {0: "Normal", 1: "Normal", 2: "Stop", 3: "Curtailment"}
+
+    result = calculate_turbine_kpis(
+        m, dataset_name="kpi_fixture", power_column="POWER", wind_speed_column="WIND",
+        classification=classification, theoretical_power_column="THEO_POWER",
+    )
+    assert result["ok"] is True
+    data = result["data"]
+    assert data["method"] == "direct_theoretical"
+    assert data["interval_minutes"] == pytest.approx(5.0)
+    assert data["production_mwh"] == pytest.approx(round(2800 * (5 / 60) / 1000, 4))
+    assert data["reachable_mwh"] == pytest.approx(round(4000 * (5 / 60) / 1000, 4))
+    assert data["pba_pct"] == pytest.approx(70.0)
+    assert data["losses_pct"] == pytest.approx(30.0)
+    assert data["rated_power_kw"] == pytest.approx(1020.0)
+    assert data["tba_pct"] == pytest.approx(75.0)
+    assert data["n_rows_used"] == 4
+    assert data["n_rows_excluded_no_reachable_estimate"] == 0
+    # Dung raw fraction CHUA lam tron (khong phai data["production_mwh"] da round o
+    # tren) de tranh sai so cong don qua 2 lan lam tron khac nhau.
+    expected_cf = round((2800 * (5 / 60) / 1000) / (1.02 * 4 * (5 / 60)) * 100, 4)
+    assert data["capacity_factor_pct"] == pytest.approx(expected_cf)
+
+
+def test_calculate_turbine_kpis_estimated_power_curve_hand_computed(tmp_path):
+    """Khong co theoretical_power_column -- dung power_curve (1 bin duy nhat, moi wind
+    speed roi vao bin nay) de uoc luong reachable qua noi suy tuyen tinh (chi 1 bin ->
+    noi suy tra ve dung median_power do, khong phu thuoc gia tri wind_speed cu the)."""
+    rows = [
+        "2024-01-01 00:00:00,900.0,8.0,",
+        "2024-01-01 00:05:00,900.0,8.0,",
+    ]
+    m = _kpi_fixture(tmp_path, rows)
+    curve = {"bin_width": 1.0, "power_curve": [
+        {"wind_speed_bin_center": 8.0, "median_power": 1000.0, "std_power": 50.0},
+    ]}
+    classification = {0: "Normal", 1: "Normal"}
+
+    result = calculate_turbine_kpis(
+        m, dataset_name="kpi_fixture", power_column="POWER", wind_speed_column="WIND",
+        classification=classification, power_curve=curve,
+    )
+    assert result["ok"] is True
+    data = result["data"]
+    assert data["method"] == "estimated_power_curve"
+    assert data["reachable_mwh"] == pytest.approx(round(2000 * (5 / 60) / 1000, 4))
+    assert data["rated_power_kw"] == pytest.approx(1000.0)  # tu power_curve, khong phai *1.02 fallback
+    assert data["pba_pct"] == pytest.approx(90.0)
+    assert data["losses_pct"] == pytest.approx(10.0)
+    assert data["tba_pct"] == pytest.approx(100.0)
+
+
+def test_calculate_turbine_kpis_prefers_theoretical_when_both_given(tmp_path):
+    """Neu ca theoretical_power_column LAN power_curve deu duoc truyen -- uu tien
+    theoretical (chinh xac hon), dung format tai lieu da ghi."""
+    rows = ["2024-01-01 00:00:00,900.0,8.0,950.0"]
+    m = _kpi_fixture(tmp_path, rows)
+    curve = {"bin_width": 1.0, "power_curve": [{"wind_speed_bin_center": 8.0, "median_power": 1000.0, "std_power": 50.0}]}
+    result = calculate_turbine_kpis(
+        m, dataset_name="kpi_fixture", power_column="POWER", wind_speed_column="WIND",
+        classification={0: "Normal"}, theoretical_power_column="THEO_POWER", power_curve=curve,
+        interval_minutes=5.0,  # chi 1 dong -> khong tu suy duoc interval qua diff(), truyen tay
+    )
+    assert result["ok"] is True
+    assert result["data"]["method"] == "direct_theoretical"
+    assert result["data"]["reachable_mwh"] == pytest.approx(round(950.0 * (5 / 60) / 1000, 4))
+
+
+def test_calculate_turbine_kpis_measurement_error_excluded_from_tba_denominator():
+    """'Measurement Error' KHONG tinh vao mau so TBA -- chi 'Stop'/'Partial Stop' la
+    unavailable trong so con lai."""
+    classification = {0: "Normal", 1: "Measurement Error", 2: "Stop", 3: "Normal"}
+    labels = pd.Series(classification)
+    from tools.turbine_diagnostic_tools import _TBA_EXCLUDED_LABELS, _TBA_UNAVAILABLE_LABELS
+    counted = labels[~labels.isin(_TBA_EXCLUDED_LABELS)]
+    assert len(counted) == 3  # loai 1 Measurement Error
+    tba = (~counted.isin(_TBA_UNAVAILABLE_LABELS)).sum() / len(counted) * 100
+    assert tba == pytest.approx(200 / 3)  # 2/3 available (Normal,Normal), 1/3 Stop
+
+
+def test_calculate_turbine_kpis_fails_without_theoretical_or_power_curve(tmp_path):
+    rows = ["2024-01-01 00:00:00,900.0,8.0,"]
+    m = _kpi_fixture(tmp_path, rows)
+    result = calculate_turbine_kpis(
+        m, dataset_name="kpi_fixture", power_column="POWER", wind_speed_column="WIND",
+        classification={0: "Normal"},
+        interval_minutes=5.0,  # chi 1 dong -> khong tu suy duoc interval qua diff(), truyen tay
+    )
+    assert result["ok"] is False
+    assert "theoretical_power_column" in result["error"] and "power_curve" in result["error"]
+
+
+def test_integration_calculate_turbine_kpis_on_real_gt1_direct_theoretical():
+    """Da do that (2026-09-10): production_mwh=33270.952 MWh qua ~2.2 nam du lieu GT1,
+    cung bac do voi PO024 (8327-10570 MWh/turbine/2 nam, turbine nho hon GT1 ~4.5MW).
+    Chi assert cac khoang hop ly (0-100% cho moi %, MWh duong) -- KHONG assert khop tuyet
+    doi ngoai production_mwh (da do co dinh, deterministic tren data that khong doi)."""
+    m = DatasetManager()
+    m.load_csv(GT1_PATH_REAL, name="GT1")
+    curve_result = estimate_power_curve(m, power_column="GT1.Grid.totW", wind_speed_column="GT1.Common.WindSpd", dataset_name="GT1", bin_width=1.0)
+    classify_result = classify_turbine_status(
+        m, power_column="GT1.Grid.totW", wind_speed_column="GT1.Common.WindSpd",
+        power_curve=curve_result["data"], dataset_name="GT1", setpoint_column="GT1.SP.ActualSPP",
+    )
+    result = calculate_turbine_kpis(
+        m, dataset_name="GT1", power_column="GT1.Grid.totW", wind_speed_column="GT1.Common.WindSpd",
+        classification=classify_result["data"]["classification"],
+        theoretical_power_column="GT1.Common.TheoActiveW",
+    )
+    assert result["ok"] is True
+    data = result["data"]
+    assert data["method"] == "direct_theoretical"
+    assert data["production_mwh"] == pytest.approx(33270.952, abs=0.01)
+    assert 0 <= data["losses_pct"] <= 100
+    assert 0 <= data["capacity_factor_pct"] <= 100
+    assert 0 <= data["tba_pct"] <= 100
+    assert 0 <= data["pba_pct"] <= 100
+    assert data["reachable_mwh"] > 0
+    assert data["rated_power_kw"] > 0
+
+
+def test_integration_calculate_turbine_kpis_on_real_wt1_estimated_power_curve():
+    """Da do that (2026-09-10): production_mwh=17181.6759 MWh (Site 2 khong co cot ly
+    thuyet, dung estimated_power_curve)."""
+    m = DatasetManager()
+    m.load_csv(WT1_PATH_REAL, name="WT1")
+    curve_result = estimate_power_curve(m, power_column="ACTIVE_POWER", wind_speed_column="WIND_SPEED", dataset_name="WT1", bin_width=1.0)
+    classify_result = classify_turbine_status(
+        m, power_column="ACTIVE_POWER", wind_speed_column="WIND_SPEED",
+        power_curve=curve_result["data"], dataset_name="WT1",
+    )
+    result = calculate_turbine_kpis(
+        m, dataset_name="WT1", power_column="ACTIVE_POWER", wind_speed_column="WIND_SPEED",
+        classification=classify_result["data"]["classification"], power_curve=curve_result["data"],
+    )
+    assert result["ok"] is True
+    data = result["data"]
+    assert data["method"] == "estimated_power_curve"
+    assert data["production_mwh"] == pytest.approx(17181.6759, abs=0.01)
+    assert 0 <= data["losses_pct"] <= 100
+    assert 0 <= data["capacity_factor_pct"] <= 100
+    assert 0 <= data["tba_pct"] <= 100
+    assert 0 <= data["pba_pct"] <= 100

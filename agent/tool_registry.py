@@ -24,6 +24,7 @@ from agent.turbine_tool_wrappers import (
     TURBINE_DEFAULT_BIN_WIDTH,
     estimate_power_curve_for_agent, classify_turbine_status_for_agent,
     group_anomaly_windows_for_agent, detect_anomalies_ml_for_agent, predict_power_for_agent,
+    calculate_turbine_kpis_for_agent,
 )
 from rag.retriever import search_knowledge_base
 from tools.tool_results import failure
@@ -180,6 +181,16 @@ class PredictPowerArgs(BaseModel):
     setpoint_column: Optional[str] = None
     feature_columns: Optional[list[str]] = None
     bin_width: float = TURBINE_DEFAULT_BIN_WIDTH
+    dataset_name: Optional[str] = None
+
+
+class CalculateTurbineKpisArgs(BaseModel):
+    power_column: Optional[str] = None
+    wind_speed_column: Optional[str] = None
+    setpoint_column: Optional[str] = None
+    theoretical_power_column: Optional[str] = None
+    bin_width: float = TURBINE_DEFAULT_BIN_WIDTH
+    interval_minutes: Optional[float] = None
     dataset_name: Optional[str] = None
 
 
@@ -346,6 +357,13 @@ def execute_tool(tool_name: str, arguments: dict, dataset_manager: DatasetManage
                 args.setpoint_column, args.feature_columns, args.bin_width,
             )
 
+        elif tool_name == "calculate_turbine_kpis":
+            args = CalculateTurbineKpisArgs(**arguments)
+            return calculate_turbine_kpis_for_agent(
+                dataset_manager, args.dataset_name, args.power_column, args.wind_speed_column,
+                args.setpoint_column, args.theoretical_power_column, args.bin_width, args.interval_minutes,
+            )
+
         else:
             return failure(f"Unknown tool: '{tool_name}'")
 
@@ -362,5 +380,5 @@ TOOL_NAMES = [
     "correlation_analysis", "explain_anomaly",
     "detect_physical_violations", "detect_sensor_issues", "diagnose_theoretical_power_deviation",
     "estimate_power_curve", "classify_turbine_status", "group_anomaly_windows",
-    "detect_anomalies_ml", "predict_power",
+    "detect_anomalies_ml", "predict_power", "calculate_turbine_kpis",
 ]
