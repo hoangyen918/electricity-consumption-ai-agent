@@ -1273,6 +1273,19 @@ def predict_power(
 _TBA_UNAVAILABLE_LABELS = {"Stop", "Partial Stop"}
 _TBA_EXCLUDED_LABELS = {"Measurement Error"}
 
+# Disclaimer đi kèm tba_pct trong output calculate_turbine_kpis() — TBA ở đây là XẤP XỈ
+# MVP dựa trên % thời gian KHÔNG ở trạng thái Stop/Partial Stop (xem 2 constant ở trên),
+# KHÔNG PHẢI TBA chuẩn hợp đồng (contractual TBA) — TBA chuẩn cần tách riêng nguyên nhân
+# "not producing" (low-wind = turbine sẵn sàng nhưng không đủ gió, KHÔNG tính là
+# unavailable trong TBA hợp đồng thật; grid-outage = lỗi lưới điện bên ngoài, thường
+# LOẠI KHỎI TBA vì không phải lỗi turbine; planned-maintenance = bảo trì theo kế hoạch,
+# thường tính riêng khỏi unplanned downtime) — rule Stop/Partial Stop hiện tại GỘP CHUNG
+# tất cả nguyên nhân "công suất gần 0" vào 1 nhãn, không phân biệt được.
+TBA_APPROXIMATION_NOTE = (
+    "TBA xấp xỉ theo tỷ lệ thời gian ở trạng thái Power Production — chưa tách riêng "
+    "low-wind/grid-outage/planned-maintenance, không phải TBA chuẩn hợp đồng."
+)
+
 
 def calculate_turbine_kpis(
     manager: DatasetManager,
@@ -1311,7 +1324,12 @@ def calculate_turbine_kpis(
       cong suat gan 0 do turbine dung). "Measurement Error" (du lieu cam bien loi, KHONG
       biet turbine thuc su chay hay dung) bi LOAI KHOI mau so hoan toan. Curtailment/
       Partial Curtailment tinh la AVAILABLE (turbine co kha nang chay, chi bi gioi han
-      theo lenh dieu do, khong phai loi turbine).
+      theo lenh dieu do, khong phai loi turbine). ĐÂY LÀ XẤP XỈ MVP, KHÔNG PHẢI TBA
+      chuẩn hợp đồng — chưa tách riêng low-wind (turbine sẵn sàng nhưng không đủ gió,
+      TBA hợp đồng thường KHÔNG tính là unavailable)/grid-outage (lỗi lưới ngoài, thường
+      loại khỏi TBA)/planned-maintenance (bảo trì theo kế hoạch, thường tính riêng) — cả
+      3 nguyên nhân này hiện bị GỘP CHUNG vào rule "công suất gần 0" (xem field
+      "tba_note" trong kết quả trả về, luôn kèm disclaimer này).
     - rated_power_kw: neu co power_curve, dung max(median_power) qua cac bin (CUNG cong
       thuc classify_turbine_status() dung de uoc luong rated_power_estimate — tai dung
       y tuong, khong tinh khac di). Neu KHONG co power_curve (chi co
@@ -1325,6 +1343,7 @@ def calculate_turbine_kpis(
       nhe (production thuc te cao hon phan da tinh, do vai dong bi loai khoi tong).
 
     Tra ve: production_mwh, reachable_mwh, losses_pct, capacity_factor_pct, tba_pct,
+    tba_note (disclaimer co dinh giai thich TBA la xap xi, xem TBA_APPROXIMATION_NOTE),
     pba_pct, rated_power_kw, method, interval_minutes, n_rows_used,
     n_rows_excluded_no_reachable_estimate.
     """
@@ -1441,6 +1460,7 @@ def calculate_turbine_kpis(
             "losses_pct": losses_pct,
             "capacity_factor_pct": capacity_factor_pct,
             "tba_pct": tba_pct,
+            "tba_note": TBA_APPROXIMATION_NOTE,
             "pba_pct": pba_pct,
             "rated_power_kw": round(rated_power_kw, 4),
             "method": method,

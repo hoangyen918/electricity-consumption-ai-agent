@@ -1061,6 +1061,8 @@ def test_calculate_turbine_kpis_direct_theoretical_hand_computed(tmp_path):
     assert data["losses_pct"] == pytest.approx(30.0)
     assert data["rated_power_kw"] == pytest.approx(1020.0)
     assert data["tba_pct"] == pytest.approx(75.0)
+    from tools.turbine_diagnostic_tools import TBA_APPROXIMATION_NOTE
+    assert data["tba_note"] == TBA_APPROXIMATION_NOTE
     assert data["n_rows_used"] == 4
     assert data["n_rows_excluded_no_reachable_estimate"] == 0
     # Dung raw fraction CHUA lam tron (khong phai data["production_mwh"] da round o
