@@ -16,6 +16,8 @@ from tools.turbine_diagnostic_tools import (
     detect_anomalies_ml,
     predict_power,
     calculate_turbine_kpis,
+    _mape,
+    MAPE_MIN_ACTUAL_POWER_KW,
 )
 
 GT1_PATH_REAL = "data/wind_turbine/data1/his_data_GT1.csv"
@@ -846,6 +848,23 @@ def _predict_power_fixture(tmp_path, n_train=50, n_test=20, extra_features=None)
     return m, classification, power_curve, test_powers, train_fraction
 
 
+def test_mape_helper_excludes_near_zero_points_and_computes_correctly():
+    """Tay tinh: 5 diem, 3 diem |actual|<=50kW (1.0, -0.5, 40.0) bi loai — CHI con 2 diem
+    (100.0, 200.0) dung de tinh MAPE."""
+    actual = np.array([100.0, 200.0, 1.0, -0.5, 40.0])
+    pred = np.array([110.0, 180.0, 5.0, 3.0, 45.0])
+    result = _mape(actual, pred, MAPE_MIN_ACTUAL_POWER_KW)
+    expected = np.mean([abs((100.0 - 110.0) / 100.0), abs((200.0 - 180.0) / 200.0)]) * 100
+    assert result == pytest.approx(expected, rel=1e-9)
+    assert result == pytest.approx(10.0, rel=1e-9)  # |−10/100|=10%, |20/200|=10% -> mean=10%
+
+
+def test_mape_helper_returns_none_when_all_points_filtered_out():
+    actual = np.array([10.0, -5.0, 0.0, 49.9])
+    pred = np.array([12.0, -4.0, 1.0, 50.0])
+    assert _mape(actual, pred, MAPE_MIN_ACTUAL_POWER_KW) is None
+
+
 def test_predict_power_uses_xgboost_when_both_gates_pass(tmp_path):
     m, classification, power_curve, test_powers, train_fraction = _predict_power_fixture(tmp_path)
 
@@ -866,6 +885,12 @@ def test_predict_power_uses_xgboost_when_both_gates_pass(tmp_path):
     assert result["data"]["gate_4c"]["wind_speed_rank"] == 1
     assert result["data"]["metrics"]["rmse"] == pytest.approx(0.0, abs=1e-6)
     assert result["data"]["baseline_metrics"]["rmse"] > 0
+    # test_powers dao dong quanh 500 (>>50kW nguong loc) -> khong diem nao bi loai khi
+    # tinh MAPE o day. XGBoost du doan HOAN HAO -> MAPE=0. Baseline (noi suy hang so
+    # 500) MAPE > 0 vi actual dao dong ±20 quanh 500 (khong trung khop hoan toan).
+    assert result["data"]["metrics"]["mape"] == pytest.approx(0.0, abs=1e-6)
+    assert result["data"]["baseline_metrics"]["mape"] is not None
+    assert result["data"]["baseline_metrics"]["mape"] > 0
 
 
 def test_predict_power_falls_back_when_gate_4b_fails(tmp_path):
@@ -979,6 +1004,10 @@ def test_predict_power_falls_back_when_insufficient_data(tmp_path):
     assert result["ok"] is True
     assert result["data"]["method_used"] == "power_curve_interpolation"
     assert "Không đủ điểm" in result["data"]["ml_gate_reason"]
+    # nhanh _fallback() cung phai co "mape" trong metrics (fixture nay actual=500+i,
+    # >>50kW nguong loc -> khong bi loai het, mape phai la so, khong phai None).
+    assert "mape" in result["data"]["metrics"]
+    assert result["data"]["metrics"]["mape"] is not None
 
 
 def test_integration_predict_power_on_real_gt1_uses_xgboost_as_measured():
@@ -1000,6 +1029,14 @@ def test_integration_predict_power_on_real_gt1_uses_xgboost_as_measured():
     assert result["data"]["method_used"] == "xgboost"
     assert result["data"]["metrics"]["rmse"] < result["data"]["baseline_metrics"]["rmse"]
     assert result["data"]["gate_4c"]["wind_speed_rank"] == 1
+    # MAPE that tren GT1 (do 2026-09-11, khong gia dinh) — chi kiem tra la so hop le,
+    # khong am, khong None (dataset that > 30 diem con lai sau loc 50kW nen chac chan
+    # co gia tri).
+    assert result["data"]["metrics"]["mape"] is not None
+    assert result["data"]["metrics"]["mape"] >= 0
+    assert result["data"]["baseline_metrics"]["mape"] is not None
+    assert result["data"]["baseline_metrics"]["mape"] >= 0
+    print(f"\n[GT1 MAPE thuc do] xgboost={result['data']['metrics']['mape']}, baseline={result['data']['baseline_metrics']['mape']}")
 
 
 def test_integration_predict_power_on_real_wt1_uses_xgboost_as_measured():
@@ -1019,6 +1056,11 @@ def test_integration_predict_power_on_real_wt1_uses_xgboost_as_measured():
     assert result["data"]["method_used"] == "xgboost"
     assert result["data"]["metrics"]["rmse"] < result["data"]["baseline_metrics"]["rmse"]
     assert result["data"]["gate_4c"]["wind_speed_rank"] == 1
+    assert result["data"]["metrics"]["mape"] is not None
+    assert result["data"]["metrics"]["mape"] >= 0
+    assert result["data"]["baseline_metrics"]["mape"] is not None
+    assert result["data"]["baseline_metrics"]["mape"] >= 0
+    print(f"\n[WT1 MAPE thuc do] xgboost={result['data']['metrics']['mape']}, baseline={result['data']['baseline_metrics']['mape']}")
 
 
 # =============================== calculate_turbine_kpis ===============================
