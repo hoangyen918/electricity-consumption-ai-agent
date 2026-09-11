@@ -17,6 +17,7 @@ from tools.turbine_diagnostic_tools import (
     predict_power,
     calculate_turbine_kpis,
     calculate_loss_by_category,
+    get_yaw_error,
     _mape,
     MAPE_MIN_ACTUAL_POWER_KW,
     CLASSIFICATION_LABELS,
@@ -1426,3 +1427,80 @@ def test_integration_calculate_turbine_kpis_on_real_wt1_estimated_power_curve():
     assert 0 <= data["capacity_factor_pct"] <= 100
     assert 0 <= data["tba_pct"] <= 100
     assert 0 <= data["pba_pct"] <= 100
+
+
+# =============================== get_yaw_error ===============================
+
+def test_get_yaw_error_site1_reads_column_directly():
+    """Site 1: doc TRUC TIEP GT1.Common.WindTrackDevAng, KHONG bien doi gi (kha ca gia
+    tri am/duong nam ngoai [-180,180] gia dinh -- neu co, do la du lieu that cua cot co
+    san, ham nay khong tu y clip)."""
+    df = pd.DataFrame({"GT1.Common.WindTrackDevAng": [-15.5, 0.0, 42.3, -180.0, 179.9]})
+    result = get_yaw_error(df, "site1")
+    assert list(result) == pytest.approx([-15.5, 0.0, 42.3, -180.0, 179.9])
+
+
+def test_get_yaw_error_site2_wrap_around_hand_computed_cases():
+    """Tay tinh tung case bien theo dung cong thuc ((raw+180)%360)-180, raw=NACELLE-WIND:
+      nacelle=350, wind=10  -> raw=340   -> wrapped=-20  (dung vi du task: '350-10 phai
+                                                           ra +-20, khong phai 340')
+      nacelle=10,  wind=350 -> raw=-340  -> wrapped=+20  (chieu nguoc lai)
+      nacelle=5,   wind=355 -> raw=-350  -> wrapped=+10
+      nacelle=180, wind=0   -> raw=180   -> wrapped=-180 (bien dung == +-180)
+      nacelle=0,   wind=0   -> raw=0     -> wrapped=0
+      nacelle=90,  wind=80  -> raw=10    -> wrapped=10   (case thuong, khong wrap)"""
+    df = pd.DataFrame({
+        "DIRECTION_NACELLE": [350.0, 10.0, 5.0, 180.0, 0.0, 90.0],
+        "DIRECTION_WIND":    [10.0, 350.0, 355.0, 0.0, 0.0, 80.0],
+    })
+    result = get_yaw_error(df, "site2")
+    expected = [-20.0, 20.0, 10.0, -180.0, 0.0, 10.0]
+    assert list(result) == pytest.approx(expected)
+    assert all(-180.0 <= v <= 180.0 for v in result)
+
+
+def test_get_yaw_error_site2_propagates_nan():
+    df = pd.DataFrame({"DIRECTION_NACELLE": [350.0, np.nan], "DIRECTION_WIND": [10.0, 20.0]})
+    result = get_yaw_error(df, "site2")
+    assert result.iloc[0] == pytest.approx(-20.0)
+    assert pd.isna(result.iloc[1])
+
+
+def test_get_yaw_error_raises_for_unsupported_site():
+    df = pd.DataFrame({"DIRECTION_NACELLE": [1.0], "DIRECTION_WIND": [2.0]})
+    with pytest.raises(ValueError, match="không được hỗ trợ"):
+        get_yaw_error(df, "site3")
+
+
+def test_get_yaw_error_raises_for_missing_columns():
+    df = pd.DataFrame({"DIRECTION_NACELLE": [1.0]})  # thieu DIRECTION_WIND
+    with pytest.raises(ValueError, match="DIRECTION_WIND"):
+        get_yaw_error(df, "site2")
+    df2 = pd.DataFrame({"other_col": [1.0]})
+    with pytest.raises(ValueError, match="WindTrackDevAng"):
+        get_yaw_error(df2, "site1")
+
+
+def test_integration_get_yaw_error_on_real_wt1_distribution_is_physically_reasonable():
+    """Kiem tra tren du lieu that Site 2 (WT1): moi gia tri phai nam trong [-180,180]
+    (khong co gia tri 'dien ro' do loi wrap-around), va da so gan 0 (nacelle thuong bam
+    theo huong gio, chi lech khi dang xoay/dieu chinh)."""
+    m = DatasetManager()
+    m.load_csv(WT1_PATH_REAL, name="WT1")
+    df = m.get_dataframe("WT1")
+    yaw_error = get_yaw_error(df, "site2")
+
+    valid = yaw_error.dropna()
+    assert len(valid) > 0
+    assert valid.min() >= -180.0
+    assert valid.max() <= 180.0
+
+    median_abs = float(valid.abs().median())
+    pct_within_10deg = float((valid.abs() <= 10.0).mean() * 100)
+    print(f"\n[WT1 yaw_error] n={len(valid)}, median|yaw_error|={median_abs:.4f}°, "
+          f"% trong [-10°,10°]={pct_within_10deg:.2f}%, min={valid.min():.2f}, max={valid.max():.2f}")
+    # Nacelle bam theo huong gio phan lon thoi gian -- median lech nho (khong assert con
+    # so cu the vi CHUA do truoc, chi assert bien do hop ly: median duoi 30 do, da so
+    # (>50%) nam trong +-10 do quanh 0.
+    assert median_abs < 30.0
+    assert pct_within_10deg > 50.0

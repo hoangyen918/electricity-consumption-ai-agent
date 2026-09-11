@@ -64,6 +64,36 @@ def _power_wind_columns(site: str) -> tuple[str, str]:
     return "ACTIVE_POWER", "WIND_SPEED"
 
 
+def get_yaw_error(df: pd.DataFrame, site: str) -> pd.Series:
+    """Yaw error (độ) — độ lệch giữa hướng nacelle và hướng gió thực tế, dùng chung cho
+    cả 2 site (chuẩn hoá tên cột khác nhau, KHÔNG thay đổi cách tính riêng của Site 1).
+
+    Site 1 (GT1): đọc TRỰC TIẾP GT1.Common.WindTrackDevAng (đã có sẵn từ SCADA, KHÔNG
+    tính lại/không suy diễn — giữ nguyên như trước).
+
+    Site 2 (WT1-4): KHÔNG có cột sẵn — derive từ DIRECTION_NACELLE - DIRECTION_WIND, xử
+    lý wrap-around bằng công thức chuẩn ((x + 180) % 360) - 180 để kết quả LUÔN nằm
+    trong [-180, 180]. Không xử lý wrap-around sẽ cho kết quả SAI về mặt vật lý ở biên
+    0°/360° — vd DIRECTION_NACELLE=350°, DIRECTION_WIND=10°: hiệu số thô = 340°, nhưng
+    2 hướng này trên thực tế chỉ lệch nhau 20° (đi qua mốc 0°/360° là đường ngắn hơn);
+    công thức trả về đúng -20° (không phải 340°).
+
+    Raise ValueError nếu site không phải "site1"/"site2", hoặc thiếu cột cần thiết
+    trong df (không tự đoán/không silent-fail)."""
+    if site == "site1":
+        col = "GT1.Common.WindTrackDevAng"
+        if col not in df.columns:
+            raise ValueError(f"Site 1 cần cột '{col}' để lấy yaw_error nhưng dataset không có cột này.")
+        return df[col].astype(float)
+    if site == "site2":
+        missing = [c for c in ("DIRECTION_NACELLE", "DIRECTION_WIND") if c not in df.columns]
+        if missing:
+            raise ValueError(f"Site 2 cần các cột {missing} để tính yaw_error nhưng dataset không có.")
+        raw_diff = df["DIRECTION_NACELLE"].astype(float) - df["DIRECTION_WIND"].astype(float)
+        return ((raw_diff + 180.0) % 360.0) - 180.0
+    raise ValueError(f"Site '{site}' không được hỗ trợ cho get_yaw_error() — chỉ 'site1' hoặc 'site2'.")
+
+
 CATEGORICAL_MAX_UNIQUE = 31  # du cho hour(24)/month(12)/OpSt(7) nhung khong nham voi cot lien tuc
 
 
