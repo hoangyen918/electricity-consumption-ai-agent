@@ -16,8 +16,10 @@ from tools.turbine_diagnostic_tools import (
     detect_anomalies_ml,
     predict_power,
     calculate_turbine_kpis,
+    calculate_loss_by_category,
     _mape,
     MAPE_MIN_ACTUAL_POWER_KW,
+    CLASSIFICATION_LABELS,
 )
 
 GT1_PATH_REAL = "data/wind_turbine/data1/his_data_GT1.csv"
@@ -1179,6 +1181,198 @@ def test_calculate_turbine_kpis_fails_without_theoretical_or_power_curve(tmp_pat
     )
     assert result["ok"] is False
     assert "theoretical_power_column" in result["error"] and "power_curve" in result["error"]
+
+
+def test_calculate_loss_by_category_direct_theoretical_hand_computed(tmp_path):
+    """Tay tinh, CUNG fixture voi test_calculate_turbine_kpis_direct_theoretical_hand_
+    computed o tren de doi chieu duoc: 4 dong 5 phut, power=[1000,800,0,1000],
+    theoretical=1000 co dinh, nhan=[Normal,Normal,Stop,Curtailment].
+    interval_hours=5/60. loss_kwh = (theo-power)*interval_hours, CHI cong cho dong
+    KHONG PHAI Normal:
+      dong2 (Stop): (1000-0)*5/60 = 83.3333 kWh = 0.0833333 MWh -> round 0.0833
+      dong3 (Curtailment): (1000-1000)*5/60 = 0 kWh = 0.0 MWh
+    total = 0.0833 (dong 0,1 la Normal, KHONG duoc cong dua loss cua chung, du loss thuc
+    su khac 0 o dong 1: (1000-800)*5/60=16.6667 kWh)."""
+    rows = [
+        "2024-01-01 00:00:00,1000.0,5.5,1000.0",
+        "2024-01-01 00:05:00,800.0,5.5,1000.0",
+        "2024-01-01 00:10:00,0.0,5.5,1000.0",
+        "2024-01-01 00:15:00,1000.0,5.5,1000.0",
+    ]
+    m = _kpi_fixture(tmp_path, rows)
+    classification = {0: "Normal", 1: "Normal", 2: "Stop", 3: "Curtailment"}
+
+    result = calculate_loss_by_category(
+        m, dataset_name="kpi_fixture", power_column="POWER", wind_speed_column="WIND",
+        classification=classification, theoretical_power_column="THEO_POWER",
+    )
+    assert result["ok"] is True
+    data = result["data"]
+    assert data["method"] == "direct_theoretical"
+    assert data["interval_minutes"] == pytest.approx(5.0)
+    assert data["n_rows_used"] == 4
+    assert data["loss_by_category_mwh"] == {
+        "Stop": pytest.approx(0.0833, abs=1e-4),
+        "Curtailment": pytest.approx(0.0, abs=1e-4),
+    }
+    assert data["total_loss_mwh"] == pytest.approx(0.0833, abs=1e-4)
+
+
+def test_calculate_loss_by_category_all_normal_returns_empty(tmp_path):
+    """Khong dong nao khac Normal -> loss_by_category_mwh rong, total=0 (khong loi)."""
+    rows = [
+        "2024-01-01 00:00:00,1000.0,5.5,1000.0",
+        "2024-01-01 00:05:00,1000.0,5.5,1000.0",
+    ]
+    m = _kpi_fixture(tmp_path, rows)
+    classification = {0: "Normal", 1: "Normal"}
+    result = calculate_loss_by_category(
+        m, dataset_name="kpi_fixture", power_column="POWER", wind_speed_column="WIND",
+        classification=classification, theoretical_power_column="THEO_POWER",
+    )
+    assert result["ok"] is True
+    assert result["data"]["loss_by_category_mwh"] == {}
+    assert result["data"]["total_loss_mwh"] == pytest.approx(0.0)
+
+
+def test_calculate_loss_by_category_estimated_power_curve_hand_computed(tmp_path):
+    """Khong co theoretical_power_column -- dung power_curve (1 bin, moi wind speed roi
+    vao bin nay). power=[900,700], median_power=1000, nhan=[Normal,Under Production].
+    interval=5 phut. Dong 1 (Under Production): loss=(1000-700)*5/60=25 kWh=0.025 MWh."""
+    rows = [
+        "2024-01-01 00:00:00,900.0,8.0,",
+        "2024-01-01 00:05:00,700.0,8.0,",
+    ]
+    m = _kpi_fixture(tmp_path, rows)
+    curve = {"bin_width": 1.0, "power_curve": [
+        {"wind_speed_bin_center": 8.0, "median_power": 1000.0, "std_power": 50.0},
+    ]}
+    classification = {0: "Normal", 1: "Under Production"}
+    result = calculate_loss_by_category(
+        m, dataset_name="kpi_fixture", power_column="POWER", wind_speed_column="WIND",
+        classification=classification, power_curve=curve,
+    )
+    assert result["ok"] is True
+    data = result["data"]
+    assert data["method"] == "estimated_power_curve"
+    assert data["loss_by_category_mwh"] == {"Under Production": pytest.approx(0.025, abs=1e-4)}
+    assert data["total_loss_mwh"] == pytest.approx(0.025, abs=1e-4)
+
+
+def test_calculate_loss_by_category_fails_without_theoretical_or_power_curve(tmp_path):
+    rows = ["2024-01-01 00:00:00,900.0,8.0,"]
+    m = _kpi_fixture(tmp_path, rows)
+    result = calculate_loss_by_category(
+        m, dataset_name="kpi_fixture", power_column="POWER", wind_speed_column="WIND",
+        classification={0: "Normal"}, interval_minutes=5.0,
+    )
+    assert result["ok"] is False
+    assert "theoretical_power_column" in result["error"] and "power_curve" in result["error"]
+
+
+def _assert_gap_equals_normal_only_contribution(
+    m, dataset_name, power_column, wind_speed_column, classification,
+    theoretical_power_column, power_curve, losses_mwh_kpi, total_loss_category,
+):
+    """KHONG assert tong loss_by_category ≈ losses_mwh (DA DO THAT: lech 17.6%/-38.7%,
+    KHONG nho — xem docstring calculate_loss_by_category()). Thay vao do, assert dung
+    BAT BIEN toan hoc THAT SU dung: gap = losses_mwh(KPI, TOAN BO dong) - total_loss_mwh
+    (CHI non-Normal) phai bang CHINH XAC tong (reachable-actual) tren rieng cac dong
+    "Normal" — tinh DOC LAP, KHONG goi lai calculate_turbine_kpis()/calculate_loss_by_
+    category() de tranh false-positive do dung chung 1 loi tiem an."""
+    from tools.turbine_diagnostic_tools import _compute_reachable_power_per_row, _infer_interval_hours
+
+    df = m.get_dataframe(dataset_name)
+    reachable, _ = _compute_reachable_power_per_row(df, theoretical_power_column, power_curve, wind_speed_column)
+    _, interval_hours = _infer_interval_hours(df, None)
+    actual = df[power_column].astype(float)
+    valid = reachable.notna() & actual.notna()
+    labels = pd.Series(classification).reindex(df.index)
+    normal_mask = valid & (labels == "Normal")
+
+    loss_per_row_mwh = (reachable - actual) * interval_hours / 1000
+    normal_only_contribution = round(float(loss_per_row_mwh[normal_mask].sum()), 4)
+    gap = round(losses_mwh_kpi - total_loss_category, 4)
+
+    print(f"[{dataset_name}] gap(KPI-category)={gap}, normal_only_contribution(doc lap)={normal_only_contribution}")
+    assert gap == pytest.approx(normal_only_contribution, abs=0.001), (
+        f"{dataset_name}: gap ({gap}) phai bang CHINH XAC dong gop rieng cua nhan Normal "
+        f"({normal_only_contribution}) -- neu KHONG khop, day la BUG khac (khong phai do "
+        f"Normal), can dieu tra tiep, KHONG duoc ket luan la do Normal khi chua verify."
+    )
+
+
+def test_integration_calculate_loss_by_category_on_real_gt1_gap_equals_normal_contribution():
+    """Xac nhan bang so THAT (2026-09-11, khong gia dinh): tong loss_by_category_mwh
+    (CHI nhan khong-Normal) KHONG khop losses_mwh cua calculate_turbine_kpis() (lech that
+    +177.77 MWh = 17.6% -- xem docstring calculate_loss_by_category() giai thich ro
+    nguyen nhan GT1 dung TheoActiveW lam reachable, khac tham chieu voi phan loai
+    Normal). Test nay KHONG assert 'khop trong dung sai %' (da chung minh SAI) ma assert
+    dung BAT BIEN toan hoc: gap = dong gop rieng cua nhan Normal, tinh DOC LAP."""
+    m = DatasetManager()
+    m.load_csv(GT1_PATH_REAL, name="GT1")
+    curve_result = estimate_power_curve(m, power_column="GT1.Grid.totW", wind_speed_column="GT1.Common.WindSpd", dataset_name="GT1", bin_width=1.0)
+    classify_result = classify_turbine_status(
+        m, power_column="GT1.Grid.totW", wind_speed_column="GT1.Common.WindSpd",
+        power_curve=curve_result["data"], dataset_name="GT1", setpoint_column="GT1.SP.ActualSPP",
+    )
+    classification = classify_result["data"]["classification"]
+
+    kpi_result = calculate_turbine_kpis(
+        m, dataset_name="GT1", power_column="GT1.Grid.totW", wind_speed_column="GT1.Common.WindSpd",
+        classification=classification, theoretical_power_column="GT1.Common.TheoActiveW",
+    )
+    assert kpi_result["ok"] is True
+
+    loss_result = calculate_loss_by_category(
+        m, dataset_name="GT1", power_column="GT1.Grid.totW", wind_speed_column="GT1.Common.WindSpd",
+        classification=classification, theoretical_power_column="GT1.Common.TheoActiveW",
+    )
+    assert loss_result["ok"] is True
+    # Cac nhan tra ve phai la tap con hop le cua 8 nhan Meteodyn, khong bao gio co "Normal"
+    assert "Normal" not in loss_result["data"]["loss_by_category_mwh"]
+    assert set(loss_result["data"]["loss_by_category_mwh"].keys()) <= set(CLASSIFICATION_LABELS)
+
+    _assert_gap_equals_normal_only_contribution(
+        m, "GT1", "GT1.Grid.totW", "GT1.Common.WindSpd", classification,
+        "GT1.Common.TheoActiveW", None,
+        kpi_result["data"]["losses_mwh"], loss_result["data"]["total_loss_mwh"],
+    )
+
+
+def test_integration_calculate_loss_by_category_on_real_wt1_gap_equals_normal_contribution():
+    """Tuong tu GT1 nhung dau NGUOC LAI (da do that): dong Normal dong gop -111.48 MWh =
+    -38.7% losses_mwh (287.84 MWh) -- xem docstring calculate_loss_by_category() (WT1
+    dung CHINH power-curve median lam reachable, cung tham chieu voi Normal, nhung phan
+    du con lai sau khi loai 2 duoi cuc tri khong con doi xung quanh median goc)."""
+    m = DatasetManager()
+    m.load_csv(WT1_PATH_REAL, name="WT1")
+    curve_result = estimate_power_curve(m, power_column="ACTIVE_POWER", wind_speed_column="WIND_SPEED", dataset_name="WT1", bin_width=1.0)
+    classify_result = classify_turbine_status(
+        m, power_column="ACTIVE_POWER", wind_speed_column="WIND_SPEED",
+        power_curve=curve_result["data"], dataset_name="WT1",
+    )
+    classification = classify_result["data"]["classification"]
+
+    kpi_result = calculate_turbine_kpis(
+        m, dataset_name="WT1", power_column="ACTIVE_POWER", wind_speed_column="WIND_SPEED",
+        classification=classification, power_curve=curve_result["data"],
+    )
+    assert kpi_result["ok"] is True
+
+    loss_result = calculate_loss_by_category(
+        m, dataset_name="WT1", power_column="ACTIVE_POWER", wind_speed_column="WIND_SPEED",
+        classification=classification, power_curve=curve_result["data"],
+    )
+    assert loss_result["ok"] is True
+    assert "Normal" not in loss_result["data"]["loss_by_category_mwh"]
+    assert set(loss_result["data"]["loss_by_category_mwh"].keys()) <= set(CLASSIFICATION_LABELS)
+
+    _assert_gap_equals_normal_only_contribution(
+        m, "WT1", "ACTIVE_POWER", "WIND_SPEED", classification,
+        None, curve_result["data"],
+        kpi_result["data"]["losses_mwh"], loss_result["data"]["total_loss_mwh"],
+    )
 
 
 def test_integration_calculate_turbine_kpis_on_real_gt1_direct_theoretical():

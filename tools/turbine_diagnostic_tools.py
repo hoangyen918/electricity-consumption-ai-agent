@@ -1378,6 +1378,74 @@ TBA_APPROXIMATION_NOTE = (
 )
 
 
+def _infer_interval_hours(df: pd.DataFrame, interval_minutes: float | None) -> tuple[float, float]:
+    """Suy ra interval_minutes tu mode() cua datetime.diff() neu khong truyen tay — TAI
+    DUNG boi calculate_turbine_kpis() VA calculate_loss_by_category() (refactor tu logic
+    goc chi co trong calculate_turbine_kpis() truoc day) de dam bao 2 ham LUON dung
+    CHINH XAC cung interval_hours khi goi cung tham so — tranh lech ket qua do 2 noi tu
+    suy interval khac nhau (vd 1 noi lam tron khac, hoac dataset co gap bat thuong khien
+    mode() nhay cam thu tu tinh). Raise ValueError (KHONG failure() truc tiep) de caller
+    tu quyet dinh cach bao loi, giong quy uoc _power_curve_interpolate()/
+    _compute_reachable_power_per_row() da dung."""
+    if "datetime" not in df.columns:
+        raise ValueError(
+            "Dataset không có cột 'datetime' đã derive (xem "
+            "DatasetManager.derive_time_columns) — không thể tính interval theo thời gian."
+        )
+    if interval_minutes is None:
+        diffs = df["datetime"].diff().dropna()
+        mode_result = diffs.mode()
+        if len(mode_result) == 0:
+            raise ValueError(
+                "Không suy ra được interval từ cột datetime (dữ liệu quá ít hoặc không "
+                "có bản ghi liên tiếp)."
+            )
+        interval_minutes = mode_result.iloc[0].total_seconds() / 60
+    return interval_minutes, interval_minutes / 60
+
+
+def _compute_reachable_power_per_row(
+    df: pd.DataFrame,
+    theoretical_power_column: str | None,
+    power_curve: dict | None,
+    wind_speed_column: str | None,
+) -> tuple[pd.Series, str]:
+    """Tinh reachable_power (cong suat 'le ra dat duoc') moi dong — TAI DUNG boi
+    calculate_turbine_kpis() VA calculate_loss_by_category() (refactor tu logic goc chi
+    co trong calculate_turbine_kpis() truoc day), dam bao 2 ham KHONG BAO GIO tinh
+    reachable khac nhau du goi voi cung tham so (neu khac nhau, tong loss_by_category se
+    khong the doi chieu duoc voi losses_mwh mot cach dang tin cay).
+
+    method="direct_theoretical" (Site 1, dung TRUC TIEP theoretical_power_column) hoac
+    "estimated_power_curve" (Site 2, noi suy tuyen tinh tu power_curve qua
+    _power_curve_interpolate() da co san — can wind_speed_column). Uu tien
+    theoretical_power_column neu ca 2 deu duoc truyen (chinh xac hon uoc luong).
+    Raise ValueError neu khong the tinh duoc (khong truyen gi ca, hoac power_curve
+    khong hop le) — caller tu bat va return failure()."""
+    if theoretical_power_column is not None:
+        return df[theoretical_power_column].astype(float), "direct_theoretical"
+    if power_curve is not None:
+        power_curve_list = power_curve.get("power_curve")
+        bin_width = power_curve.get("bin_width")
+        if not power_curve_list or not bin_width:
+            raise ValueError(
+                "power_curve không hợp lệ — cần truyền field 'data' từ kết quả "
+                "estimate_power_curve() (có 'power_curve' và 'bin_width'), không phải "
+                "toàn bộ dict {'ok':..,'data':..}."
+            )
+        if wind_speed_column is None:
+            raise ValueError(
+                "Cần truyền wind_speed_column khi ước lượng reachable power qua "
+                "power_curve (Site 2, không có theoretical_power_column)."
+            )
+        interpolated = _power_curve_interpolate(power_curve, df[wind_speed_column].astype(float).values)
+        return pd.Series(interpolated, index=df.index), "estimated_power_curve"
+    raise ValueError(
+        "Cần truyền theoretical_power_column (Site 1) HOẶC power_curve (Site 2) để tính "
+        "reachable energy — không có cả 2 thì không thể ước lượng tổn thất."
+    )
+
+
 def calculate_turbine_kpis(
     manager: DatasetManager,
     dataset_name: str,
@@ -1433,10 +1501,11 @@ def calculate_turbine_kpis(
       so nay lon so voi tong so dong thi capacity_factor_pct co the bi UNDERESTIMATE
       nhe (production thuc te cao hon phan da tinh, do vai dong bi loai khoi tong).
 
-    Tra ve: production_mwh, reachable_mwh, losses_pct, capacity_factor_pct, tba_pct,
-    tba_note (disclaimer co dinh giai thich TBA la xap xi, xem TBA_APPROXIMATION_NOTE),
-    pba_pct, rated_power_kw, method, interval_minutes, n_rows_used,
-    n_rows_excluded_no_reachable_estimate.
+    Tra ve: production_mwh, reachable_mwh, losses_mwh (= reachable_mwh - production_mwh,
+    THEM 2026-09-11 cho calculate_loss_by_category() doi chieu — xem docstring ham do),
+    losses_pct, capacity_factor_pct, tba_pct, tba_note (disclaimer co dinh giai thich TBA
+    la xap xi, xem TBA_APPROXIMATION_NOTE), pba_pct, rated_power_kw, method,
+    interval_minutes, n_rows_used, n_rows_excluded_no_reachable_estimate.
     """
     try:
         df = manager.get_dataframe(dataset_name)
@@ -1453,24 +1522,15 @@ def calculate_turbine_kpis(
             if col_error:
                 return failure(col_error)
 
-        if "datetime" not in df.columns:
-            return failure(
-                "Dataset không có cột 'datetime' đã derive (xem "
-                "DatasetManager.derive_time_columns) — không thể tính interval/Production "
-                "theo thời gian."
-            )
+        try:
+            interval_minutes, interval_hours = _infer_interval_hours(df, interval_minutes)
+        except ValueError as exc:
+            return failure(str(exc))
 
-        if interval_minutes is None:
-            diffs = df["datetime"].diff().dropna()
-            mode_result = diffs.mode()
-            if len(mode_result) == 0:
-                return failure(
-                    "Không suy ra được interval từ cột datetime (dữ liệu quá ít hoặc không "
-                    "có bản ghi liên tiếp)."
-                )
-            interval_minutes = mode_result.iloc[0].total_seconds() / 60
-        interval_hours = interval_minutes / 60
-
+        # Validate + xay median_lookup TRUOC (giu nguyen thu tu goc) — dung cho
+        # rated_power_kw ben duoi BAT KE method thuc su dung la gi (vd theoretical_power_
+        # column duoc uu tien cho reachable, nhung power_curve VAN duoc validate/dung de
+        # uoc luong rated_power neu co truyen kem).
         median_lookup = None
         if power_curve is not None:
             power_curve_list = power_curve.get("power_curve")
@@ -1483,21 +1543,12 @@ def calculate_turbine_kpis(
                 )
             median_lookup = pd.Series({b["wind_speed_bin_center"]: b["median_power"] for b in power_curve_list})
 
-        if theoretical_power_column is not None:
-            method = "direct_theoretical"
-            reachable_per_row = df[theoretical_power_column].astype(float)
-        elif median_lookup is not None:
-            method = "estimated_power_curve"
-            try:
-                interpolated = _power_curve_interpolate(power_curve, df[wind_speed_column].astype(float).values)
-            except ValueError as exc:
-                return failure(str(exc))
-            reachable_per_row = pd.Series(interpolated, index=df.index)
-        else:
-            return failure(
-                "Cần truyền theoretical_power_column (Site 1) HOẶC power_curve (Site 2) để "
-                "tính reachable energy — không có cả 2 thì không thể ước lượng tổn thất/PBA."
+        try:
+            reachable_per_row, method = _compute_reachable_power_per_row(
+                df, theoretical_power_column, power_curve, wind_speed_column,
             )
+        except ValueError as exc:
+            return failure(str(exc))
 
         actual_per_row = df[power_column].astype(float)
 
@@ -1548,6 +1599,7 @@ def calculate_turbine_kpis(
         return success({
             "production_mwh": round(production_mwh, 4),
             "reachable_mwh": round(reachable_mwh, 4),
+            "losses_mwh": round(reachable_mwh - production_mwh, 4),
             "losses_pct": losses_pct,
             "capacity_factor_pct": capacity_factor_pct,
             "tba_pct": tba_pct,
@@ -1558,6 +1610,122 @@ def calculate_turbine_kpis(
             "interval_minutes": interval_minutes,
             "n_rows_used": n_rows_used,
             "n_rows_excluded_no_reachable_estimate": n_rows_excluded,
+        })
+    except Exception as exc:
+        return failure(str(exc))
+
+
+def calculate_loss_by_category(
+    manager: DatasetManager,
+    dataset_name: str,
+    power_column: str,
+    wind_speed_column: str,
+    classification: dict,
+    power_curve: dict | None = None,
+    theoretical_power_column: str | None = None,
+    interval_minutes: float | None = None,
+) -> dict:
+    """
+    Năng lượng lãng phí (MWh) THEO TỪNG NHÃN trong 8 nhãn Meteodyn — nền tảng cho donut
+    chart (Dashboard Tab 1) và farm-level ranking (Tab 0). Khác classify_turbine_status()
+    (chỉ % THỜI GIAN mỗi nhãn) và calculate_turbine_kpis() (chỉ 1 con số losses_mwh TỔNG,
+    không tách theo nhãn) — hàm này trả loss_mwh RIÊNG cho từng nhãn KHÔNG PHẢI "Normal".
+
+    CÔNG THỨC (mỗi dòng KHÔNG phải "Normal"):
+        loss_kwh = (reachable_power - actual_power) * interval_hours
+    Tổng hợp theo nhãn: {label: sum(loss_kwh)/1000} (MWh). TÁI DÙNG HOÀN TOÀN
+    _compute_reachable_power_per_row()/_infer_interval_hours() — CHÍNH XÁC cùng logic
+    calculate_turbine_kpis() dùng (2 hàm private này được refactor RA từ
+    calculate_turbine_kpis() để đảm bảo KHÔNG BAO GIỜ tính reachable/interval khác nhau
+    giữa 2 tool khi gọi cùng tham số).
+
+    wind_speed_column BẮT BUỘC (khác signature đề xuất ban đầu không liệt kê tham số
+    này) — cần thiết để nội suy reachable power qua power_curve ở Site 2 (không có
+    theoretical_power_column), giống hệt calculate_turbine_kpis() đã yêu cầu.
+
+    QUAN TRỌNG — tại sao tổng loss_by_category_mwh KHÔNG khớp losses_mwh của
+    calculate_turbine_kpis() (ĐÃ ĐO THẬT 2026-09-11, KHÔNG PHẢI giả định "sai số nhỏ" —
+    giả thuyết ban đầu ĐÃ SAI, xem lại bên dưới): losses_mwh (calculate_turbine_kpis) =
+    reachable_mwh - production_mwh tính trên TOÀN BỘ dòng hợp lệ (kể cả nhãn "Normal"),
+    còn hàm này CHỈ cộng dồn trên dòng KHÔNG PHẢI "Normal" (đúng công thức được yêu cầu).
+    Vì tổng-toàn-bộ = tổng(Normal) + tổng(non-Normal) MỘT CÁCH TUYỆT ĐỐI (đẳng thức toán
+    học, không phải xấp xỉ), nên:
+        losses_mwh(KPI) - total_loss_mwh(hàm này) == tổng (reachable-actual) CHỈ trên
+        dòng "Normal" — ĐÃ VERIFY KHỚP CHÍNH XÁC đến 4 chữ số thập phân trên cả GT1/WT1
+        (script kiểm chứng riêng, không qua 2 hàm này để tránh false-positive do dùng
+        chung 1 lỗi).
+
+    Ban đầu dự đoán SAI rằng khoảng chênh này "nhỏ, gần 0" (residual Normal đối xứng
+    quanh trung vị nên trung hoà) — ĐO THẬT cho thấy KHÔNG nhỏ và dấu KHÔNG nhất quán:
+    - GT1 (direct_theoretical): dòng Normal đóng góp +177.77 MWh = 17.6% tổng losses_mwh
+      (1010.37 MWh). Nguyên nhân: reachable_power = TheoActiveW (mô hình lý thuyết) —
+      MỘT tham chiếu HOÀN TOÀN KHÁC với power-curve median (chuẩn dùng để phân loại
+      "Normal"). Không có lý do cấu trúc nào để 2 đại lượng khác nhau này triệt tiêu khi
+      cộng dồn trên tập "Normal" (theo power curve) — chỉ là ~1 kWh/dòng nhưng nhân với
+      180.499 dòng Normal (77% dữ liệu) thành số MWh đáng kể.
+    - WT1 (estimated_power_curve): dòng Normal đóng góp -111.48 MWh = -38.7% tổng
+      losses_mwh (287.84 MWh) — NGƯỢC DẤU với GT1 dù reachable ở đây CHÍNH LÀ power-curve
+      median (cùng tham chiếu dùng phân loại Normal). Giả thuyết: sau khi loại 2 đuôi cực
+      trị (Under/Over Production, ±2σ) khỏi phân phối residual, phần "lõi" còn lại (chính
+      là "Normal") không còn đối xứng quanh trung vị gốc — mean-của-phần-còn-lại lệch nhẹ
+      khỏi median-của-toàn-bộ. CHƯA verify sâu hơn (vd histogram residual Normal) — đây
+      là giả thuyết hợp lý, không phải kết luận đã kiểm chứng.
+    KẾT LUẬN: loss_by_category_mwh là 1 breakdown THEO ĐÚNG CÔNG THỨC được yêu cầu (chỉ
+    nguyên-nhân-bất-thường, không gồm biến thiên "Normal" bình thường) — KHÔNG PHẢI, và
+    KHÔNG NÊN kỳ vọng là, một phép chia lại 100% của losses_mwh. Muốn dùng cho mục đích
+    đối chiếu tổng số tuyệt đối, phải cộng thêm phần "Normal" (không có trong dict trả
+    về) — xem "Trả về" bên dưới.
+
+    Trả về: {"loss_by_category_mwh": {label: mwh, ...} (CHỈ nhãn không-Normal xuất hiện
+    trong classification), "total_loss_mwh": tổng tất cả nhãn trên, "interval_minutes",
+    "method", "n_rows_used"}.
+    """
+    try:
+        df = manager.get_dataframe(dataset_name)
+        if df is None:
+            return failure(_dataset_not_found(manager, dataset_name))
+
+        for col in (power_column, wind_speed_column):
+            col_error = _validate_column(manager, col, dataset_name)
+            if col_error:
+                return failure(col_error)
+        if theoretical_power_column is not None:
+            col_error = _validate_column(manager, theoretical_power_column, dataset_name)
+            if col_error:
+                return failure(col_error)
+
+        try:
+            interval_minutes, interval_hours = _infer_interval_hours(df, interval_minutes)
+        except ValueError as exc:
+            return failure(str(exc))
+
+        try:
+            reachable_per_row, method = _compute_reachable_power_per_row(
+                df, theoretical_power_column, power_curve, wind_speed_column,
+            )
+        except ValueError as exc:
+            return failure(str(exc))
+
+        actual_per_row = df[power_column].astype(float)
+        valid_mask = reachable_per_row.notna() & actual_per_row.notna()
+        n_rows_used = int(valid_mask.sum())
+        if n_rows_used == 0:
+            return failure("Không có dòng nào có đủ dữ liệu (power + reachable) để tính loss theo nhãn.")
+
+        labels = pd.Series(classification).reindex(df.index)
+        non_normal_mask = valid_mask & labels.notna() & (labels != "Normal")
+
+        loss_mwh_per_row = (reachable_per_row - actual_per_row) * interval_hours / 1000
+        grouped_sum = loss_mwh_per_row[non_normal_mask].groupby(labels[non_normal_mask]).sum()
+        loss_by_category_mwh = {label: round(float(total), 4) for label, total in grouped_sum.items()}
+        total_loss_mwh = round(float(sum(loss_by_category_mwh.values())), 4)
+
+        return success({
+            "loss_by_category_mwh": loss_by_category_mwh,
+            "total_loss_mwh": total_loss_mwh,
+            "interval_minutes": interval_minutes,
+            "method": method,
+            "n_rows_used": n_rows_used,
         })
     except Exception as exc:
         return failure(str(exc))
