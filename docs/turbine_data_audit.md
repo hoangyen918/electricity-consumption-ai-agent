@@ -305,3 +305,19 @@ Validate bằng đối chiếu OpSt (GT1, không dùng làm input, chỉ kiểm 
   tạm thời trong vận hành bình thường (gió yếu dần), không phải hiện tượng bán-dừng
   thật — **cần domain expert review định nghĩa ngưỡng trước khi dùng nhãn này cho
   quyết định vận hành thật**.
+
+## Hướng cải thiện V2 (tham khảo NREL WIND Toolkit validation methodology — tài liệu này validate DỮ LIỆU MÔ PHỎNG, không phải SCADA thật, nên chỉ 1 phần áp dụng được), chưa làm
+
+- Hysteresis cho cut-out/restart (state machine thay vì rule tức thời) — rule cut-out
+  hiện tại đã "sạch" (0 vi phạm ở audit Phase 1, xem "Rule không tìm ra vi phạm nào"),
+  chưa có bằng chứng cần thiết ngay, để dành nếu sau này thấy vấn đề.
+- Daily/seasonal production profile chart (theo giờ/tháng).
+- Ramp analysis (power thay đổi giữa 2 bước liên tiếp) dùng P95/P99 thay vì giá trị
+  cực trị đơn lẻ.
+- FFT/autocorrelation để phân biệt artifact do pipeline (vd spike đúng phút 00/15/30/45)
+  với anomaly vật lý thật.
+
+Đã loại bỏ khỏi danh sách trên (đã có sẵn từ Phase 3, verify qua code thật
+`tools/turbine_diagnostic_tools.py:591-603` ngày 2026-09-11 — không phải suy đoán):
+record count mỗi bin (`n_points_used`, `n_points_total`) và độ phân tán mỗi bin
+(`std_power`, `iqr_power`) trong output của `estimate_power_curve()` — 2026-09-11.
