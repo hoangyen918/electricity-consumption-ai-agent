@@ -938,6 +938,28 @@ def detect_anomalies_ml(
     tương lai — nhưng trên GT1/WT1 hiện tại, kết quả THỰC TẾ khi gọi hàm này sẽ LUÔN
     là fallback, vì gate thất bại thật, không phải giả lập.
 
+    THỬ LẠI LẦN 2 (2026-09-11, script khảo sát KHÔNG commit vào repo, KHÔNG tích hợp
+    vào hàm này — chỉ ghi nhận kết quả): train Isolation Forest trên deviation_from_curve
+    (residual = power - median_power_tại_bin, TÁI DÙNG đúng công thức classify_turbine_
+    status() dùng) thay vì (power, wind_speed) thô, thử cả 2 biến thể 1D (chỉ deviation)
+    và 2D (deviation + wind_speed), so với 2 baseline z-score ĐỘC LẬP (z-score trên power
+    thô — như lần 1; VÀ z-score MỚI trên chính deviation_from_curve). KẾT QUẢ: **Gate 4a
+    VẪN FAIL cả 4 tổ hợp** (2 site × 2 biến thể) — overlap 0.00%-5.97%, xa dưới 80%:
+    - GT1: baseline z-score-trên-deviation KHÔNG còn suy biến như baseline z-score-trên-
+      power (flag 1.43% điểm thay vì 0%) — nhưng overlap với IF vẫn chỉ 4.35%-5.97%.
+    - WT1: overlap 2.44%-5.24% (baseline power) và 2.61%-3.84% (baseline deviation).
+    NGUYÊN NHÂN CẤU TRÚC (không chỉ do chọn sai feature): contamination ước lượng từ %
+    không-Normal trong classification cao bất thường (22.85% GT1, 28.10% WT1) vì gồm cả
+    trạng thái vận hành hợp lệ (Curtailment/Stop/Partial Stop...), không chỉ điểm bất
+    thường thật — buộc Isolation Forest flag 24%-37% tổng số điểm, trong khi z-score chỉ
+    flag <2% (đuôi cực trị thống kê). 2 phương pháp đo 2 khái niệm khác nhau về bản chất
+    ("~1/4-1/3 dữ liệu lệch nhẹ" vs "điểm cực trị hiếm") nên overlap thấp gần như là hệ
+    quả tất yếu của cách ước lượng contamination hiện tại, không chỉ do không gian
+    feature. Đây là BẰNG CHỨNG THỨ 2 (độc lập với lần 1, feature khác hẳn) củng cố quyết
+    định KHÔNG dùng ML cho phát hiện bất thường trên 2 dataset này — nếu muốn thử lại lần
+    3, nên xem xét đổi cách ước lượng contamination (vd percentile cố định thay vì %
+    không-Normal) trước khi đổi feature lần nữa.
+
     classification: dict {row_index: label} từ classify_turbine_status() (TÁI DÙNG,
     không tính lại) — dùng để (a) lọc tập "Normal" làm train set, (b) ước lượng
     contamination = % không-Normal trong CHÍNH dataset (không hardcode 0.1 mặc định
@@ -1080,6 +1102,25 @@ def _power_curve_interpolate(power_curve: dict, wind_speed_values) -> np.ndarray
     return np.interp(wind_speed_values, xs, ys)
 
 
+# Nguong loai diem "gan 0" khi tinh MAPE cho predict_power() — KHOP voi nguong da dung
+# o "Vấn đề 10" (docs/turbine_data_audit.md): |cong suat am/gan 0| <50kW la house/
+# parasitic load binh thuong (<1% rated ca 2 site GT1 va WT1-4), KHONG phai muc cong
+# suat phat dien binh thuong. Neu khong loc, cac diem nay (actual gan 0, vd 1kW) lam
+# MAPE bi thoi phong phi ly (actual=1kW, predict=5kW -> loi diem do = 400%), khong phan
+# anh dung chat luong model o vung cong suat phat dien binh thuong (hang tram-nghin kW).
+MAPE_MIN_ACTUAL_POWER_KW = 50.0
+
+
+def _mape(actual: np.ndarray, pred: np.ndarray, min_actual_threshold: float) -> float | None:
+    """MAPE (%) CHI tinh tren cac diem |actual| > min_actual_threshold (xem
+    MAPE_MIN_ACTUAL_POWER_KW). Tra ve None neu khong con diem nao sau khi loc (vd toan
+    bo tap test deu la diem gan 0 — hiem nhung co the xay ra voi dataset nho/loc manh)."""
+    mask = np.abs(actual) > min_actual_threshold
+    if mask.sum() == 0:
+        return None
+    return float(np.mean(np.abs((actual[mask] - pred[mask]) / actual[mask])) * 100)
+
+
 def predict_power(
     manager: DatasetManager,
     power_column: str,
@@ -1090,6 +1131,7 @@ def predict_power(
     feature_columns: list[str] | None = None,
     train_fraction: float = 0.8,
     random_state: int = 42,
+    include_predictions: bool = False,
 ) -> dict:
     """
     XGBoost dự đoán power_column từ wind_speed_column + feature_columns bổ sung (pitch/
@@ -1120,8 +1162,33 @@ def predict_power(
     NGAY CẢ KHI Gate 4b pass — dấu hiệu nghi ngờ bug preprocessing (lệch thời gian giữa
     feature/target, feature bị scale sai...), không chỉ đơn thuần "model kém".
 
+    metrics/baseline_metrics có thêm "mape" (%, cả XGBoost lẫn baseline) — CHỈ để hiển
+    thị thêm thông tin, KHÔNG dùng để quyết định gate_4b_pass (vẫn chốt theo RMSE như
+    trước). MAPE chỉ tính trên điểm |actual| > MAPE_MIN_ACTUAL_POWER_KW (50kW) — bỏ qua
+    điểm gần 0 (turbine Stop/gió yếu), xem docstring MAPE_MIN_ACTUAL_POWER_KW/_mape() ở
+    trên; nếu không lọc, các điểm actual gần 0 sẽ thổi phồng MAPE phi lý (vd actual=1kW,
+    predict=5kW → lỗi điểm đó = 400%, không phản ánh đúng chất lượng model ở vùng công
+    suất phát điện bình thường). Có thể trả về None nếu không còn điểm nào sau khi lọc.
+
+    MAPE THẬT ĐO ĐƯỢC (2026-09-11, feature_columns như trên): GT1 xgboost=21.11% >
+    baseline=18.43% (XGBoost MAPE TỆ HƠN baseline dù Gate 4b pass theo RMSE!); WT1
+    xgboost=17.74% ≈ baseline=17.81% (gần như ngang nhau). Đây là bằng chứng RMSE và
+    MAPE có thể mâu thuẫn — RMSE nhạy với sai số tuyệt đối (nổi bật ở vùng công suất
+    cao), MAPE nhạy với sai số tương đối (nổi bật ở vùng công suất thấp, dù đã lọc
+    <50kW). KHÔNG đổi gate_4b_pass theo phát hiện này (gate vẫn chốt theo RMSE như thiết
+    kế ban đầu) — chỉ ghi nhận để người dùng hiểu rõ giới hạn thật của Gate 4b khi diễn
+    giải "XGBoost tốt hơn baseline".
+
     xgboost và sklearn.metrics được import LAZY bên trong hàm (cùng lý do phòng hờ như
     detect_anomalies_ml() — tránh lỗi thư viện ML làm sập cả module).
+
+    include_predictions=False THEO MẶC ĐỊNH (agent/tool schema KHÔNG bao giờ truyền
+    True — xem agent/turbine_tool_wrappers.py::predict_power_for_agent) vì lý do TƯƠNG
+    TỰ classify_turbine_status(): không trả nguyên văn dữ liệu từng dòng cho LLM (tốn
+    token/chi phí vô ích). Chỉ dùng True khi gọi TRỰC TIẾP từ code nội bộ (Dashboard tab
+    Power Curve) cần overlay predicted power lên biểu đồ — khi đó, VÀ CHỈ KHI
+    method_used=="xgboost", trả thêm "predictions": {"row_index", wind_speed_column,
+    "predicted_power"} CHỈ cho tập test (~20% cuối, KHÔNG phải toàn bộ dataset).
     """
     try:
         df = manager.get_dataframe(dataset_name)
@@ -1170,11 +1237,16 @@ def predict_power(
             ss_res = float(np.sum((actual_fb - baseline_pred_fb) ** 2))
             ss_tot = float(np.sum((actual_fb - actual_fb.mean()) ** 2))
             r2_fb = 1 - ss_res / ss_tot if ss_tot > 0 else None
+            mape_fb = _mape(actual_fb, baseline_pred_fb, MAPE_MIN_ACTUAL_POWER_KW)
             return success({
                 "method_used": "power_curve_interpolation",
                 "ml_gate_reason": reason,
                 "test_size": int(len(actual_fb)),
-                "metrics": {"rmse": round(rmse_fb, 4), "mae": round(mae_fb, 4), "r2": (round(r2_fb, 4) if r2_fb is not None else None)},
+                "metrics": {
+                    "rmse": round(rmse_fb, 4), "mae": round(mae_fb, 4),
+                    "r2": (round(r2_fb, 4) if r2_fb is not None else None),
+                    "mape": (round(mape_fb, 4) if mape_fb is not None else None),
+                },
             })
 
         if train_mask.sum() < 30:
@@ -1209,6 +1281,10 @@ def predict_power(
 
         r2_xgb = _r2(y_test_arr, y_pred_xgb)
         r2_baseline = _r2(y_test_arr, baseline_pred)
+        # MAPE CHI de hien thi them thong tin — KHONG dua vao gate 4b/4c (van chot theo
+        # RMSE/feature importance nhu truoc, xem yeu cau task khong doi tieu chi gate).
+        mape_xgb = _mape(y_test_arr, y_pred_xgb, MAPE_MIN_ACTUAL_POWER_KW)
+        mape_baseline = _mape(y_test_arr, baseline_pred, MAPE_MIN_ACTUAL_POWER_KW)
 
         gate_4b_pass = bool(rmse_xgb < rmse_baseline)
         gate_4b_info = {
@@ -1248,15 +1324,30 @@ def predict_power(
                 result["data"]["gate_4c"] = gate_4c_info
             return result
 
-        return success({
+        result_data = {
             "method_used": "xgboost",
             "gate_4b": gate_4b_info,
             "gate_4c": gate_4c_info,
             "feature_columns": all_features,
             "test_size": int(len(y_test_arr)),
-            "metrics": {"rmse": round(rmse_xgb, 4), "mae": round(mae_xgb, 4), "r2": (round(r2_xgb, 4) if r2_xgb is not None else None)},
-            "baseline_metrics": {"rmse": round(rmse_baseline, 4), "mae": round(mae_baseline, 4), "r2": (round(r2_baseline, 4) if r2_baseline is not None else None)},
-        })
+            "metrics": {
+                "rmse": round(rmse_xgb, 4), "mae": round(mae_xgb, 4),
+                "r2": (round(r2_xgb, 4) if r2_xgb is not None else None),
+                "mape": (round(mape_xgb, 4) if mape_xgb is not None else None),
+            },
+            "baseline_metrics": {
+                "rmse": round(rmse_baseline, 4), "mae": round(mae_baseline, 4),
+                "r2": (round(r2_baseline, 4) if r2_baseline is not None else None),
+                "mape": (round(mape_baseline, 4) if mape_baseline is not None else None),
+            },
+        }
+        if include_predictions:
+            result_data["predictions"] = {
+                "row_index": df.loc[test_mask].index.tolist(),
+                wind_speed_column: df.loc[test_mask, wind_speed_column].tolist(),
+                "predicted_power": [round(float(v), 4) for v in y_pred_xgb],
+            }
+        return success(result_data)
     except Exception as exc:
         return failure(str(exc))
 

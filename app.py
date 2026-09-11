@@ -17,6 +17,7 @@ from tools.turbine_diagnostic_tools import (
 )
 from agent.turbine_tool_wrappers import (
     group_anomaly_windows_for_agent, get_or_compute_power_curve, get_or_compute_classification,
+    predict_power_for_agent,
 )
 from agent.agent import Agent
 from config.settings import SETTINGS
@@ -840,6 +841,54 @@ def _render_power_curve_tab():
         xaxis_title="Wind Speed (m/s)", yaxis_title=f"Power ({power_column})",
         title=f"Power Curve — {selected}", legend_title="Trạng thái",
     )
+
+    # Checkbox TAT mac dinh (khong tu dong tinh them neu user khong bat) — XGBoost
+    # (predict_power) chi chay local qua execute_tool, khong qua tunnel/API, nhung van
+    # ton thoi gian huan luyen that nen de opt-in, khong bat mac dinh.
+    show_prediction = st.checkbox(
+        "So sánh với dự đoán XGBoost", value=False, key=f"powercurve_show_prediction_{selected}",
+    )
+    if show_prediction:
+        with st.spinner("Đang huấn luyện XGBoost (predict_power)..."):
+            prediction_result = predict_power_for_agent(
+                manager, dataset_name=selected, power_column=power_column,
+                wind_speed_column=wind_speed_column, setpoint_column=setpoint_column,
+                feature_columns=None, bin_width=1.0, include_predictions=True,
+            )
+        if not prediction_result["ok"]:
+            st.error(prediction_result["error"])
+        elif prediction_result["data"]["method_used"] != "xgboost":
+            st.info(
+                "XGBoost không vượt Gate 4b/4c cho dataset này — đã fallback về power "
+                f"curve interpolation, không có dự đoán XGBoost để hiển thị: "
+                f"{prediction_result['data'].get('ml_gate_reason', '')}"
+            )
+        else:
+            pred_data = prediction_result["data"]["predictions"]
+            pred_df = pd.DataFrame({
+                "row_index": pred_data["row_index"],
+                "wind_speed": pred_data[wind_speed_column],
+                "predicted_power": pred_data["predicted_power"],
+            }).set_index("row_index")
+            # CHI lay cac diem NAM TRONG mau plot_df da sample o tren (8000 diem hoac
+            # toan bo neu dataset nho hon) — khong tinh/lay them diem moi ngoai mau do,
+            # dam bao 2 trace (scatter that + du doan) dung CHUNG 1 tap diem hien thi.
+            overlap_index = plot_df.index.intersection(pred_df.index)
+            pred_plot = pred_df.loc[overlap_index].sort_values("wind_speed")
+            if pred_plot.empty:
+                st.info(
+                    "Không có điểm nào trong mẫu hiển thị hiện tại rơi vào tập test của "
+                    "predict_power() (20% cuối theo thời gian) — thử tắt/bật lại checkbox "
+                    "để lấy mẫu ngẫu nhiên mới, hoặc chọn dataset khác."
+                )
+            else:
+                fig.add_trace(go.Scatter(
+                    x=pred_plot["wind_speed"], y=pred_plot["predicted_power"],
+                    mode="lines", name="Dự đoán XGBoost",
+                    line=dict(color="red", width=2, dash="dot"),
+                ))
+                st.caption("Model đã verify: RMSE thấp hơn power curve interpolation (Gate 4b/4c PASS).")
+
     st.plotly_chart(fig, width="stretch")
 
 

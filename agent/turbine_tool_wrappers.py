@@ -277,8 +277,11 @@ def detect_anomalies_ml_for_agent(
 def predict_power_for_agent(
     dataset_manager: DatasetManager, dataset_name: str | None, power_column: str | None,
     wind_speed_column: str | None, setpoint_column: str | None, feature_columns: list[str] | None,
-    bin_width: float,
+    bin_width: float, include_predictions: bool = False,
 ) -> dict:
+    """include_predictions=False mac dinh — tool dispatch cho LLM (agent/tool_registry.py)
+    KHONG bao gio truyen True (chi goi 6 tham so dau, xem TOOL dispatch). CHI Dashboard
+    tab Power Curve (app.py, goi Python truc tiep) truyen True de lay predictions overlay."""
     power_column, wind_speed_column, err = resolve_power_wind_columns(dataset_manager, dataset_name, power_column, wind_speed_column)
     if err:
         return failure(err)
@@ -299,6 +302,7 @@ def predict_power_for_agent(
         dataset_manager, power_column=power_column, wind_speed_column=wind_speed_column,
         power_curve=curve_result["data"], classification=classification_result["data"]["classification"],
         dataset_name=dataset_name, feature_columns=feature_columns,
+        include_predictions=include_predictions,
     )
 
 
