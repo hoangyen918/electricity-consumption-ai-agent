@@ -13,6 +13,7 @@ from tools.dataset_manager import DatasetManager
 from tools.data_cleaning_tools import clean_missing_values, detect_duplicates
 from tools.turbine_diagnostic_tools import (
     diagnose_theoretical_power_deviation, OPST_LABELS, calculate_turbine_kpis,
+    calculate_loss_by_category, get_yaw_error, _compute_reachable_power_per_row,
     _detect_site, _power_wind_columns, CLASSIFICATION_LABELS,
 )
 from agent.turbine_tool_wrappers import (
@@ -753,6 +754,63 @@ _CLASSIFICATION_STATUS_COLORS = {
 _POWER_CURVE_SAMPLE_SIZE = 8000
 
 
+def _build_power_curve_figure(selected, power_column, wind_speed_column, curve_result, classify_result, df):
+    """Xay go.Figure scatter (to mau theo 8 nhan) + duong power curve median — TACH RA
+    tu _render_power_curve_tab() de tai dung o tab Overview theo Turbine (KHONG viet
+    lai). Tra ve (fig, plot_df, sample_note) — plot_df can duoc tra ve rieng vi
+    _render_power_curve_tab() con dung index cua no de align voi predict_power overlay
+    (checkbox XGBoost); sample_note la text canh bao sampling (None neu khong sample)."""
+    # classification la {row_index: label} (da doc ky code that, khong doan) — align
+    # voi df.index qua reindex, drop cac dong khong co nhan (khong nen xay ra thuc te
+    # vi classify_turbine_status() gan nhan cho MOI dong, phong ngua thoi).
+    labels = pd.Series(classify_result["data"]["classification"]).reindex(df.index)
+    plot_df = pd.DataFrame({
+        "wind_speed": df[wind_speed_column],
+        "power": df[power_column],
+        "label": labels,
+    }).dropna(subset=["label"])
+
+    total_points = len(plot_df)
+    sample_note = None
+    if total_points > _POWER_CURVE_SAMPLE_SIZE:
+        plot_df = plot_df.sample(n=_POWER_CURVE_SAMPLE_SIZE, random_state=42)
+        sample_note = (
+            f"Hiển thị mẫu ngẫu nhiên {_POWER_CURVE_SAMPLE_SIZE:,} điểm trên tổng "
+            f"{total_points:,} điểm (tránh render chậm với dataset lớn)."
+        )
+
+    # Ve Normal TRUOC (nen), cac nhan bat thuong SAU — de nhan bat thuong (thieu so)
+    # khong bi che khuat boi khoi diem Normal (da so).
+    labels_present = set(plot_df["label"].unique())
+    ordered_labels = [l for l in CLASSIFICATION_LABELS if l in labels_present]
+    ordered_labels.sort(key=lambda l: 0 if l == "Normal" else 1)
+
+    fig = go.Figure()
+    for label in ordered_labels:
+        subset = plot_df[plot_df["label"] == label]
+        fig.add_trace(go.Scatter(
+            x=subset["wind_speed"], y=subset["power"], mode="markers", name=label,
+            marker=dict(size=4, color=_CLASSIFICATION_STATUS_COLORS.get(label, "#000000")),
+            opacity=0.6,
+        ))
+
+    # Duong power curve (median moi bin) ve DE LEN lam duong tham chieu — line, khong
+    # phai marker, de phan biet ro voi cac diem du lieu that ben duoi.
+    curve_bins = curve_result["data"]["power_curve"]
+    curve_x = [b["wind_speed_bin_center"] for b in curve_bins if b["median_power"] is not None]
+    curve_y = [b["median_power"] for b in curve_bins if b["median_power"] is not None]
+    fig.add_trace(go.Scatter(
+        x=curve_x, y=curve_y, mode="lines", name="Power Curve (median)",
+        line=dict(color="black", width=2),
+    ))
+
+    fig.update_layout(
+        xaxis_title="Wind Speed (m/s)", yaxis_title=f"Power ({power_column})",
+        title=f"Power Curve — {selected}", legend_title="Trạng thái",
+    )
+    return fig, plot_df, sample_note
+
+
 def _render_power_curve_tab():
     st.subheader("📈 Power Curve — Wind Speed vs Power, tô màu theo trạng thái")
     manager = _get_wind_turbine_manager()
@@ -794,53 +852,11 @@ def _render_power_curve_tab():
             st.error(classify_result["error"])
             return
 
-    # classification la {row_index: label} (da doc ky code that, khong doan) — align
-    # voi df.index qua reindex, drop cac dong khong co nhan (khong nen xay ra thuc te
-    # vi classify_turbine_status() gan nhan cho MOI dong, phong ngua thoi).
-    labels = pd.Series(classify_result["data"]["classification"]).reindex(df.index)
-    plot_df = pd.DataFrame({
-        "wind_speed": df[wind_speed_column],
-        "power": df[power_column],
-        "label": labels,
-    }).dropna(subset=["label"])
-
-    total_points = len(plot_df)
-    if total_points > _POWER_CURVE_SAMPLE_SIZE:
-        plot_df = plot_df.sample(n=_POWER_CURVE_SAMPLE_SIZE, random_state=42)
-        st.caption(
-            f"Hiển thị mẫu ngẫu nhiên {_POWER_CURVE_SAMPLE_SIZE:,} điểm trên tổng "
-            f"{total_points:,} điểm (tránh render chậm với dataset lớn)."
-        )
-
-    # Ve Normal TRUOC (nen), cac nhan bat thuong SAU — de nhan bat thuong (thieu so)
-    # khong bi che khuat boi khoi diem Normal (da so).
-    labels_present = set(plot_df["label"].unique())
-    ordered_labels = [l for l in CLASSIFICATION_LABELS if l in labels_present]
-    ordered_labels.sort(key=lambda l: 0 if l == "Normal" else 1)
-
-    fig = go.Figure()
-    for label in ordered_labels:
-        subset = plot_df[plot_df["label"] == label]
-        fig.add_trace(go.Scatter(
-            x=subset["wind_speed"], y=subset["power"], mode="markers", name=label,
-            marker=dict(size=4, color=_CLASSIFICATION_STATUS_COLORS.get(label, "#000000")),
-            opacity=0.6,
-        ))
-
-    # Duong power curve (median moi bin) ve DE LEN lam duong tham chieu — line, khong
-    # phai marker, de phan biet ro voi cac diem du lieu that ben duoi.
-    curve_bins = curve_result["data"]["power_curve"]
-    curve_x = [b["wind_speed_bin_center"] for b in curve_bins if b["median_power"] is not None]
-    curve_y = [b["median_power"] for b in curve_bins if b["median_power"] is not None]
-    fig.add_trace(go.Scatter(
-        x=curve_x, y=curve_y, mode="lines", name="Power Curve (median)",
-        line=dict(color="black", width=2),
-    ))
-
-    fig.update_layout(
-        xaxis_title="Wind Speed (m/s)", yaxis_title=f"Power ({power_column})",
-        title=f"Power Curve — {selected}", legend_title="Trạng thái",
+    fig, plot_df, sample_note = _build_power_curve_figure(
+        selected, power_column, wind_speed_column, curve_result, classify_result, df,
     )
+    if sample_note:
+        st.caption(sample_note)
 
     # Checkbox TAT mac dinh (khong tu dong tinh them neu user khong bat) — XGBoost
     # (predict_power) chi chay local qua execute_tool, khong qua tunnel/API, nhung van
@@ -978,10 +994,190 @@ def _render_timeline_tab():
     )
 
 
+def _render_turbine_overview_tab():
+    """Tab 6 MOI — tong hop 1 cho SO SANH nhanh 1 turbine bat ky trong ca 5 (khac tab
+    "Tổng quan" (tab1, thong ke missing/duplicate dataset tho) va khac cac tab chuyen
+    sau khac (Power Curve/Timeline/Diagnostic/KPI Summary) — day la TRANG TONG HOP 4
+    phan (power curve + KPI + donut loss + monthly production) CHO 1 turbine, TAI DUNG
+    HOAN TOAN cac tool/helper da co, KHONG viet lai logic nao."""
+    st.subheader("🔍 Overview theo Turbine — Power Curve / KPI / Loss / Monthly Production")
+    manager = _get_wind_turbine_manager()
+    selected = st.selectbox("Chọn turbine:", list(WIND_TURBINE_DATASET_PATHS.keys()), key="turbine_overview_select")
+
+    if not _ensure_wind_turbine_dataset_loaded(manager, selected):
+        return
+
+    df = manager.get_dataframe(selected)
+    site = _detect_site(df)
+    if site is None:
+        st.error("Không nhận diện được cấu trúc turbine gió cho dataset này.")
+        return
+
+    power_column, wind_speed_column = _power_wind_columns(site)
+    setpoint_column = "GT1.SP.ActualSPP" if site == "site1" else None
+    theoretical_power_column = (
+        "GT1.Common.TheoActiveW" if site == "site1" and "GT1.Common.TheoActiveW" in df.columns else None
+    )
+
+    # TAI DUNG cache chung voi cac tab khac (Power Curve/Timeline/KPI Summary) — xem
+    # comment giai thich chi tiet trong _render_power_curve_tab().
+    with st.spinner("Đang tính power curve + phân loại trạng thái (lần đầu có thể mất vài giây)..."):
+        curve_result = get_or_compute_power_curve(manager, selected, power_column, wind_speed_column, 1.0)
+        if not curve_result["ok"]:
+            st.error(curve_result["error"])
+            return
+        classify_result = get_or_compute_classification(
+            manager, selected, power_column, wind_speed_column, setpoint_column, 1.0,
+        )
+        if not classify_result["ok"]:
+            st.error(classify_result["error"])
+            return
+
+    # ---------- Phần 2: Power Curve (TÁI DÙNG _build_power_curve_figure, KHÔNG viết lại) ----------
+    st.markdown("### 📈 Power Curve")
+    fig, plot_df, sample_note = _build_power_curve_figure(
+        selected, power_column, wind_speed_column, curve_result, classify_result, df,
+    )
+    if sample_note:
+        st.caption(sample_note)
+    st.plotly_chart(fig, width="stretch", key=f"overview_powercurve_{selected}")
+
+    # ---------- Phần 3: Bảng KPI (TÁI DÙNG calculate_turbine_kpis, KHÔNG tính lại) ----------
+    kpi_result = calculate_turbine_kpis(
+        manager, dataset_name=selected, power_column=power_column, wind_speed_column=wind_speed_column,
+        classification=classify_result["data"]["classification"], power_curve=curve_result["data"],
+        theoretical_power_column=theoretical_power_column,
+    )
+    if not kpi_result["ok"]:
+        st.error(kpi_result["error"])
+        return
+    kpi_data = kpi_result["data"]
+
+    st.markdown("### 📊 KPI")
+    method_label = "Trực tiếp (TheoActiveW)" if kpi_data["method"] == "direct_theoretical" else "Ước lượng (power curve)"
+    st.caption(f"Reachable energy: **{method_label}**")
+
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("Production (MWh)", f"{kpi_data['production_mwh']:,.1f}")
+    col2.metric("Reachable (MWh)", f"{kpi_data['reachable_mwh']:,.1f}")
+    col3.metric("Losses (%)", f"{kpi_data['losses_pct']:.2f}%" if kpi_data["losses_pct"] is not None else "N/A")
+    col4.metric("TBA (%)", f"{kpi_data['tba_pct']:.2f}%" if kpi_data["tba_pct"] is not None else "N/A")
+    col5.metric("PBA (%)", f"{kpi_data['pba_pct']:.2f}%" if kpi_data["pba_pct"] is not None else "N/A")
+
+    # % theo nhan — TAI DUNG "summary" co san trong classify_result (KHONG tinh lai
+    # value_counts thu cong), va yaw error trung binh (Phan B, get_yaw_error()).
+    label_summary = classify_result["data"]["summary"]
+
+    def _pct_for(label: str) -> float | None:
+        entry = label_summary.get(label)
+        return entry["pct"] if entry else None
+
+    yaw_error_series = get_yaw_error(df, site)
+    yaw_mean = float(yaw_error_series.mean()) if yaw_error_series.notna().any() else None
+
+    col6, col7, col8, col9, col10 = st.columns(5)
+    for col, label in zip((col6, col7, col8, col9), ("Normal", "Stop", "Curtailment", "Under Production")):
+        pct = _pct_for(label)
+        col.metric(f"% {label}", f"{pct:.2f}%" if pct is not None else "0.00%")
+    col10.metric("Yaw Error TB (°)", f"{yaw_mean:.2f}°" if yaw_mean is not None else "N/A")
+
+    if kpi_data.get("tba_note"):
+        st.caption(f"ℹ️ {kpi_data['tba_note']}")
+
+    # ---------- Phần 4: Donut loss theo nhãn (TÁI DÙNG calculate_loss_by_category) ----------
+    st.markdown("### 🍩 Loss theo nhãn")
+    loss_result = calculate_loss_by_category(
+        manager, dataset_name=selected, power_column=power_column, wind_speed_column=wind_speed_column,
+        classification=classify_result["data"]["classification"], power_curve=curve_result["data"],
+        theoretical_power_column=theoretical_power_column,
+    )
+    if not loss_result["ok"]:
+        st.error(loss_result["error"])
+    else:
+        loss_by_category = loss_result["data"]["loss_by_category_mwh"]
+        # Pie KHONG the ve gia tri AM — "Over Production" (va doi khi "Measurement
+        # Error" o Site 2) thuong AM tren du lieu that (nghia la SAN LUONG VUOT ky
+        # vong, khong phai loss That), da do THAT tren GT1/WT1 (2026-09-11): "Over
+        # Production" = -31.77 MWh (GT1), -148.78 MWh (WT1). Tach rieng: donut CHI
+        # ve nhan co loss DUONG, nhan AM hien rieng thanh caption (khong phai bug/
+        # thieu sot, day la ban chat cong thuc loss = reachable-actual co the am).
+        positive_loss = {k: v for k, v in loss_by_category.items() if v > 0}
+        negative_gain = {k: v for k, v in loss_by_category.items() if v <= 0}
+
+        if not positive_loss:
+            st.info("Không có nhãn nào gây loss dương (100% Normal hoặc chỉ có nhãn 'gain') — không có gì để vẽ donut.")
+        else:
+            labels_list = list(positive_loss.keys())
+            values_list = list(positive_loss.values())
+            colors = [_CLASSIFICATION_STATUS_COLORS.get(l, "#000000") for l in labels_list]
+            donut_fig = go.Figure(data=[go.Pie(
+                labels=labels_list, values=values_list, hole=0.4,
+                marker=dict(colors=colors),
+            )])
+            donut_fig.update_layout(title=f"Loss theo nhãn (MWh, chỉ nhãn loss dương) — {selected}")
+            st.plotly_chart(donut_fig, width="stretch", key=f"overview_donut_{selected}")
+
+        st.caption(f"Tổng loss (nhãn dương, không tính Normal): {sum(positive_loss.values()):,.1f} MWh.")
+        if negative_gain:
+            gain_text = ", ".join(f"{k}: {v:+,.1f} MWh" for k, v in negative_gain.items())
+            st.caption(
+                f"ℹ️ Các nhãn sau có tổng ÂM (nghĩa là sản lượng VƯỢT power curve/lý "
+                f"thuyết ở nhãn đó, không phải loss thật — không vẽ trong donut ở trên): {gain_text}."
+            )
+
+    # ---------- Phần 5: Monthly production (TÁI DÙNG công thức actual_energy trong ----------
+    # ---------- calculate_turbine_kpis: sum(actual)*interval_hours/1000, ÁP DỤNG THEO GROUP) ----------
+    st.markdown("### 📅 Monthly Production")
+    if "datetime" not in df.columns:
+        st.warning("Dataset không có cột 'datetime' đã derive — không thể vẽ biểu đồ theo tháng.")
+    else:
+        interval_hours = kpi_data["interval_minutes"] / 60
+        # TAI DUNG _compute_reachable_power_per_row() CHI de xac dinh valid_mask GIONG
+        # HET calculate_turbine_kpis() dung cho production_mwh (khong phai tinh reachable
+        # de dung, chi de dam bao tap dong duoc tinh la NHAT QUAN voi con so production_mwh
+        # da hien o Phan 3 — tong monthly phai cong don ra dung production_mwh).
+        reachable_per_row, _ = _compute_reachable_power_per_row(
+            df, theoretical_power_column, curve_result["data"], wind_speed_column,
+        )
+        actual_per_row = df[power_column].astype(float)
+        valid_mask = reachable_per_row.notna() & actual_per_row.notna()
+
+        # QUYET DINH (theo DoD): ca 5 dataset deu > 12 thang du lieu that (Site 1 ~26
+        # thang, Site 2 ~60 thang) — neu > 12 thang PHAN BIET (nunique) thi gop theo
+        # YYYY-MM (khong mat thong tin theo nam); nguoc lai (dataset gia dinh ngan hon)
+        # gop theo so thang 1-12 don gian. Tinh DONG (khong hardcode) de dung neu co
+        # dataset moi ngan hon sau nay.
+        month_periods = df["datetime"].dt.to_period("M")
+        distinct_months = month_periods.nunique()
+        if distinct_months > 12:
+            month_key = month_periods.astype(str)  # "YYYY-MM"
+            x_title = "Tháng (YYYY-MM)"
+        else:
+            month_key = df["datetime"].dt.month  # 1-12
+            x_title = "Tháng"
+
+        monthly_mwh = (
+            (actual_per_row[valid_mask] * interval_hours / 1000)
+            .groupby(month_key[valid_mask])
+            .sum()
+            .sort_index()
+        )
+        monthly_fig = px.bar(
+            x=monthly_mwh.index.astype(str), y=monthly_mwh.values,
+            labels={"x": x_title, "y": "Actual Production (MWh)"},
+            title=f"Sản lượng thực tế theo tháng — {selected}",
+        )
+        st.plotly_chart(monthly_fig, width="stretch", key=f"overview_monthly_{selected}")
+        st.caption(
+            f"{distinct_months} tháng có dữ liệu · tổng {monthly_mwh.sum():,.1f} MWh "
+            f"(khớp production_mwh ở Phần KPI: {kpi_data['production_mwh']:,.1f} MWh)."
+        )
+
+
 def render_wind_turbine_dashboard():
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "📋 Tổng quan", "📈 Power Curve", "🕐 Timeline",
-        "🔍 Diagnostic", "📊 KPI Summary",
+        "🔍 Diagnostic", "📊 KPI Summary", "🔍 Overview theo Turbine",
     ])
     with tab1:
         _render_overview_tab()
@@ -993,6 +1189,8 @@ def render_wind_turbine_dashboard():
         _render_diagnostic_tab()
     with tab5:
         _render_kpi_summary_tab()
+    with tab6:
+        _render_turbine_overview_tab()
 
 
 def render_chat():
