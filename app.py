@@ -552,6 +552,115 @@ def _ensure_wind_turbine_dataset_loaded(manager: DatasetManager, key: str) -> bo
     return True
 
 
+# Nguong (diem %) de flag "PBA thap bat thuong" o tab Wind Farm Level — xem docstring
+# _render_wind_farm_level_tab() de biet ro cach dung.
+WIND_FARM_PBA_ABNORMAL_THRESHOLD_POINTS = 10.0
+
+
+def _render_wind_farm_level_tab():
+    """Tab 0 MOI — so sanh farm-level giua 4 turbine Site 2 (WT1-4), TAI DUNG HOAN TOAN
+    get_or_compute_power_curve/get_or_compute_classification/calculate_turbine_kpis/
+    get_yaw_error da co, KHONG tinh lai logic nao.
+
+    Site 1 (GT1) CHI CO 1 turbine — khai niem "so sanh giua cac turbine cung farm"
+    KHONG ap dung duoc, nen tab nay CHU Y KHONG hien thi gi cho GT1 (dung thiet ke theo
+    yeu cau, khong phai thieu sot).
+
+    TIEU CHI "BAT THUONG" (2 tieu chi RIENG BIET, KHONG gop chung de tranh mo ho):
+    1. "PBA thấp bất thường": PBA cua turbine THAP HON PBA TRUNG BINH CUA CA 4 TURBINE
+       (bao gom chinh no) qua WIND_FARM_PBA_ABNORMAL_THRESHOLD_POINTS (10 diem %). Luu y
+       gioi han thong ke da biet: vi trung binh tinh tren CA 4 (khong loai chinh no),
+       1 turbine that su kem se KEO trung binh xuong theo, lam nguong so sanh "mem" hon
+       (masking effect) — day la cach tinh ĐÚNG NHƯ ĐỀ XUẤT trong yeu cau goc, khong tu
+       y doi sang leave-one-out de giu dung tieu chi da thong nhat.
+    2. "Capacity Factor thấp nhất": don gian la turbine co capacity_factor_pct THAP NHAT
+       trong 4 turbine — tieu chi rieng, KHONG lien quan gi den tieu chi (1), co the
+       cung 1 turbine hoac khac tuy du lieu thuc te.
+    """
+    st.subheader("🏭 Wind Farm Level — So sánh 4 turbine WT1-4 (chỉ Site 2)")
+    st.caption(
+        "Site 1 (GT1) chỉ có 1 turbine duy nhất nên không áp dụng được khái niệm so "
+        "sánh cùng farm — tab này CHỈ hiển thị cho Site 2 (WindFarm04, 4 turbine WT1-4)."
+    )
+    manager = _get_wind_turbine_manager()
+    wt_names = ["WindFarm04_WT1", "WindFarm04_WT2", "WindFarm04_WT3", "WindFarm04_WT4"]
+
+    rows = []
+    with st.spinner("Đang tính KPI cho cả 4 turbine WT1-4 (lần đầu có thể mất khoảng 1 phút, các lần sau sẽ nhanh nhờ cache)..."):
+        for name in wt_names:
+            if not _ensure_wind_turbine_dataset_loaded(manager, name):
+                return
+            df = manager.get_dataframe(name)
+            site = _detect_site(df)
+            if site != "site2":
+                st.error(f"{name}: không nhận diện được đúng cấu trúc Site 2 (ACTIVE_POWER/WIND_SPEED) — không thể so sánh farm-level.")
+                return
+            power_column, wind_speed_column = _power_wind_columns(site)
+
+            curve_result = get_or_compute_power_curve(manager, name, power_column, wind_speed_column, 1.0)
+            if not curve_result["ok"]:
+                st.error(f"{name}: {curve_result['error']}")
+                return
+            classify_result = get_or_compute_classification(manager, name, power_column, wind_speed_column, None, 1.0)
+            if not classify_result["ok"]:
+                st.error(f"{name}: {classify_result['error']}")
+                return
+            kpi_result = calculate_turbine_kpis(
+                manager, dataset_name=name, power_column=power_column, wind_speed_column=wind_speed_column,
+                classification=classify_result["data"]["classification"], power_curve=curve_result["data"],
+            )
+            if not kpi_result["ok"]:
+                st.error(f"{name}: {kpi_result['error']}")
+                return
+            kpi_data = kpi_result["data"]
+            yaw_series = get_yaw_error(df, site)
+            yaw_mean = float(yaw_series.mean()) if yaw_series.notna().any() else None
+
+            rows.append({
+                "Turbine": name,
+                "Production (MWh)": kpi_data["production_mwh"],
+                "Loss (%)": kpi_data["losses_pct"],
+                "Capacity Factor (%)": kpi_data["capacity_factor_pct"],
+                "TBA (%)": kpi_data["tba_pct"],
+                "PBA (%)": kpi_data["pba_pct"],
+                "Yaw Error TB (°)": round(yaw_mean, 4) if yaw_mean is not None else None,
+            })
+
+    ranking_df = pd.DataFrame(rows)
+
+    mean_pba = ranking_df["PBA (%)"].mean()
+    ranking_df["Bất thường (PBA thấp)"] = ranking_df["PBA (%)"] < (mean_pba - WIND_FARM_PBA_ABNORMAL_THRESHOLD_POINTS)
+
+    st.markdown("### 📋 Bảng ranking (bấm tiêu đề cột để sắp xếp)")
+    st.dataframe(ranking_df, width="stretch", hide_index=True)
+
+    st.caption(
+        f"Tiêu chí 'Bất thường (PBA thấp)': PBA của turbine thấp hơn PBA TRUNG BÌNH của "
+        f"CẢ 4 turbine (hiện tại: {mean_pba:.2f}%) quá "
+        f"{WIND_FARM_PBA_ABNORMAL_THRESHOLD_POINTS:.0f} điểm phần trăm. Lưu ý: trung "
+        f"bình tính trên cả 4 (không loại turbine đang xét) — nếu 1 turbine thực sự kém "
+        f"rõ rệt, nó sẽ kéo trung bình xuống theo, khiến ngưỡng so sánh 'mềm' hơn một "
+        f"chút (masking effect đã biết trước, không phải bug)."
+    )
+    flagged = ranking_df.loc[ranking_df["Bất thường (PBA thấp)"], "Turbine"].tolist()
+    if flagged:
+        st.warning(f"⚠️ Turbine PBA thấp bất thường theo tiêu chí trên: {', '.join(flagged)}")
+    else:
+        st.success("✅ Không có turbine nào PBA thấp bất thường theo tiêu chí trên.")
+
+    lowest_cf_turbine = ranking_df.loc[ranking_df["Capacity Factor (%)"].idxmin(), "Turbine"]
+    st.info(
+        f"ℹ️ Turbine có Capacity Factor THẤP NHẤT (tiêu chí riêng, độc lập với tiêu chí "
+        f"PBA ở trên): **{lowest_cf_turbine}**"
+    )
+
+    st.markdown("### 📊 So sánh Production")
+    prod_fig = px.bar(
+        ranking_df, x="Turbine", y="Production (MWh)", title="Production (MWh) — 4 turbine WT1-4",
+    )
+    st.plotly_chart(prod_fig, width="stretch", key="windfarm_production_bar")
+
+
 def _render_overview_tab():
     st.subheader("📋 Tổng quan dataset turbine gió")
     manager = _get_wind_turbine_manager()
@@ -1173,12 +1282,60 @@ def _render_turbine_overview_tab():
             f"(khớp production_mwh ở Phần KPI: {kpi_data['production_mwh']:,.1f} MWh)."
         )
 
+        # ---------- Phần 6: Sản lượng tích lũy theo năm (TÁI DÙNG actual_per_row/valid_mask/ ----------
+        # ---------- interval_hours vừa dùng ở Monthly Production — chỉ thêm lọc theo năm + cumsum) ----------
+        st.markdown("### 📈 Sản lượng tích lũy theo năm (Cumulative YTD)")
+        monthly_mwh_by_period = (
+            (actual_per_row[valid_mask] * interval_hours / 1000)
+            .groupby(month_periods[valid_mask])
+            .sum()
+            .sort_index()
+        )
+        available_years = sorted(monthly_mwh_by_period.index.year.unique().tolist())
+        # Nam "day du 12 thang" = dung 12 gia tri thang trong monthly_mwh_by_period cho nam do
+        # (khong hardcode Jan-Dec — chi dem so thang THAT co du lieu).
+        months_per_year = {y: int((monthly_mwh_by_period.index.year == y).sum()) for y in available_years}
+        full_years = [y for y in available_years if months_per_year[y] == 12]
+        # Uu tien nam day du 12 thang GAN NHAT; neu khong nam nao day du (dataset qua ngan),
+        # fallback ve nam gan nhat hien co de tranh IndexError, khong phai gia dinh "luon co".
+        default_year = max(full_years) if full_years else available_years[-1]
+
+        selected_year = st.selectbox(
+            "Chọn năm:", available_years, index=available_years.index(default_year),
+            key=f"overview_cumulative_year_{selected}",
+        )
+        if months_per_year[selected_year] < 12:
+            st.caption(
+                f"ℹ️ Năm {selected_year} chỉ có {months_per_year[selected_year]}/12 tháng dữ liệu "
+                f"(năm đầu/cuối dataset bị cắt) — trục X chỉ hiện đúng các tháng thật có, "
+                f"không vẽ tháng rỗng."
+            )
+
+        year_series = monthly_mwh_by_period[monthly_mwh_by_period.index.year == selected_year].sort_index()
+        cumulative = year_series.cumsum()
+        x_labels = [f"{p.month:02d}/{p.year}" for p in cumulative.index]
+
+        cumulative_fig = go.Figure(data=[go.Scatter(
+            x=x_labels, y=cumulative.values, mode="lines+markers",
+        )])
+        cumulative_fig.update_layout(
+            title=f"Sản lượng tích lũy — {selected} — năm {selected_year}",
+            xaxis_title="Tháng (MM/YYYY)", yaxis_title="Sản lượng tích lũy (MWh)",
+        )
+        st.plotly_chart(cumulative_fig, width="stretch", key=f"overview_cumulative_{selected}_{selected_year}")
+        st.caption(
+            f"{len(cumulative)} tháng có dữ liệu trong năm {selected_year} · tổng năm "
+            f"{selected_year} (điểm cuối đường tích lũy): {year_series.sum():,.1f} MWh."
+        )
+
 
 def render_wind_turbine_dashboard():
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-        "📋 Tổng quan", "📈 Power Curve", "🕐 Timeline",
+    tab0, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        "🏭 Wind Farm Level", "📋 Tổng quan", "📈 Power Curve", "🕐 Timeline",
         "🔍 Diagnostic", "📊 KPI Summary", "🔍 Overview theo Turbine",
     ])
+    with tab0:
+        _render_wind_farm_level_tab()
     with tab1:
         _render_overview_tab()
     with tab2:
