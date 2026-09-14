@@ -1017,6 +1017,112 @@ def _render_power_curve_tab():
     st.plotly_chart(fig, width="stretch")
 
 
+def _render_power_curve_classification_tab():
+    """Tab MOI (vi tri thu 2/7) — tai tao dung cau truc anh Meteodyn WPA: (1) power
+    curve tô màu theo 8 nhãn (TÁI DÙNG _build_power_curve_figure(), KHÔNG viết lại),
+    (2) donut % THỜI GIAN moi nhan (bao gom Normal, tong 100%) - khac han donut LOSS
+    (MWh, khong co Normal) o tab "Overview theo Turbine" (calculate_loss_by_category())
+    - GIU NGUYEN, KHONG dung o day, (3) stacked bar 100% % thoi gian moi nhan theo thang.
+
+    Donut va chart thang o day PHAI dung CHUNG 1 classification da cache (get_or_compute_
+    classification) voi phan power curve ben tren - KHONG tinh lai rieng - de tranh lech
+    do xu ly NaN khac nhau giua 2 lan tinh doc lap.
+    """
+    st.subheader("📈 Power Curve & Trạng Thái — theo cấu trúc báo cáo Meteodyn WPA")
+    manager = _get_wind_turbine_manager()
+    selected = st.selectbox("Chọn turbine:", list(WIND_TURBINE_DATASET_PATHS.keys()), key="pc_status_dataset_select")
+
+    if not _ensure_wind_turbine_dataset_loaded(manager, selected):
+        return
+
+    df = manager.get_dataframe(selected)
+    site = _detect_site(df)
+    if site is None:
+        st.error("Không nhận diện được cấu trúc turbine gió cho dataset này.")
+        return
+
+    power_column, wind_speed_column = _power_wind_columns(site)
+    setpoint_column = "GT1.SP.ActualSPP" if site == "site1" else None
+
+    # TAI DUNG cache chung voi cac tab khac (Power Curve/Timeline/KPI Summary/Overview) —
+    # xem comment giai thich chi tiet trong _render_power_curve_tab().
+    with st.spinner("Đang tính power curve + phân loại trạng thái (lần đầu có thể mất vài giây)..."):
+        curve_result = get_or_compute_power_curve(manager, selected, power_column, wind_speed_column, 1.0)
+        if not curve_result["ok"]:
+            st.error(curve_result["error"])
+            return
+        classify_result = get_or_compute_classification(
+            manager, selected, power_column, wind_speed_column, setpoint_column, 1.0,
+        )
+        if not classify_result["ok"]:
+            st.error(classify_result["error"])
+            return
+
+    classification = classify_result["data"]["classification"]
+
+    # ---------- Phần 1: Power Curve (TÁI DÙNG _build_power_curve_figure, KHÔNG viết lại) ----------
+    st.markdown("### 📈 Power Curve — Actual vs Theoretical")
+    fig, _plot_df, sample_note = _build_power_curve_figure(
+        selected, power_column, wind_speed_column, curve_result, classify_result, df,
+    )
+    if sample_note:
+        st.caption(sample_note)
+    st.plotly_chart(fig, width="stretch", key=f"pcstatus_powercurve_{selected}")
+
+    # ---------- Phần 2: Donut % THỜI GIAN mọi trạng thái (MỚI, có Normal, tổng 100%) ----------
+    # KHÁC donut LOSS (MWh, không Normal) ở tab "Overview theo Turbine" — donut đó tính
+    # từ calculate_loss_by_category(), GIỮ NGUYÊN, không đụng ở đây.
+    st.markdown("### 🍩 Tỷ lệ thời gian theo trạng thái vận hành")
+    label_counts = pd.Series(list(classification.values())).value_counts()
+    label_pct = (label_counts / label_counts.sum() * 100).round(2)
+    ordered_labels = [l for l in CLASSIFICATION_LABELS if l in label_pct.index]
+
+    donut_fig = go.Figure(data=[go.Pie(
+        labels=ordered_labels, values=[label_pct[l] for l in ordered_labels], hole=0.4,
+        marker=dict(colors=[_CLASSIFICATION_STATUS_COLORS.get(l, "#000000") for l in ordered_labels]),
+    )])
+    donut_fig.update_layout(title=f"Tỷ lệ thời gian theo trạng thái — {selected}")
+    st.plotly_chart(donut_fig, width="stretch", key=f"pcstatus_donut_{selected}")
+    st.caption(f"Tổng {label_pct.sum():.2f}% (8 nhãn, bao gồm Normal — khớp 100% trong sai số làm tròn).")
+
+    # ---------- Phần 3: Stacked bar 100% — % thời gian mọi trạng thái THEO THÁNG ----------
+    st.markdown("### 📊 Tỷ lệ thời gian theo trạng thái, theo tháng")
+    if "datetime" not in df.columns:
+        st.warning("Dataset không có cột 'datetime' đã derive — không thể vẽ biểu đồ theo tháng.")
+    else:
+        # Align classification (dict {row_index: label}) voi df.index — CUNG cach lam
+        # nhu _build_power_curve_figure() ben tren, dam bao dung CHUNG 1 nguon phan loai.
+        labels_series = pd.Series(classification)
+        labels_series.index = labels_series.index.astype(df.index.dtype) if len(labels_series) else labels_series.index
+        labels_series = labels_series.reindex(df.index)
+
+        month_periods = df["datetime"].dt.to_period("M").rename("year_month")
+        monthly_counts = pd.crosstab(month_periods, labels_series)
+        monthly_pct = monthly_counts.div(monthly_counts.sum(axis=1), axis=0) * 100
+        monthly_pct_present = monthly_pct[[l for l in ordered_labels if l in monthly_pct.columns]]
+
+        melted = monthly_pct_present.reset_index().melt(
+            id_vars="year_month", var_name="label", value_name="pct",
+        )
+        melted["year_month"] = melted["year_month"].astype(str)
+
+        monthly_fig = px.bar(
+            melted, x="year_month", y="pct", color="label",
+            color_discrete_map=_CLASSIFICATION_STATUS_COLORS,
+            category_orders={"label": ordered_labels},
+            labels={"year_month": "Tháng (YYYY-MM)", "pct": "Tỷ lệ (%)", "label": "Trạng thái"},
+            title=f"Tỷ lệ thời gian theo trạng thái theo tháng — {selected}",
+        )
+        monthly_fig.update_layout(barmode="stack")
+        st.plotly_chart(monthly_fig, width="stretch", key=f"pcstatus_monthly_{selected}")
+
+        max_dev = (monthly_pct.sum(axis=1) - 100).abs().max()
+        st.caption(
+            f"{len(monthly_pct)} tháng có dữ liệu · mỗi tháng tổng {monthly_pct.sum(axis=1).mean():.2f}% "
+            f"trung bình (lệch tối đa so 100%: {max_dev:.4f} điểm % — sai số làm tròn)."
+        )
+
+
 def _render_timeline_tab():
     st.subheader("🕐 Timeline các khoảng thời gian bất thường")
     manager = _get_wind_turbine_manager()
@@ -1330,23 +1436,25 @@ def _render_turbine_overview_tab():
 
 
 def render_wind_turbine_dashboard():
-    tab0, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-        "🏭 Wind Farm Level", "📋 Tổng quan", "📈 Power Curve", "🕐 Timeline",
-        "🔍 Diagnostic", "📊 KPI Summary", "🔍 Overview theo Turbine",
+    tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+        "🏭 Wind Farm Level", "📈 Power Curve & Trạng Thái", "📋 Tổng quan", "📈 Power Curve",
+        "🕐 Timeline", "🔍 Diagnostic", "📊 KPI Summary", "🔍 Overview theo Turbine",
     ])
     with tab0:
         _render_wind_farm_level_tab()
     with tab1:
-        _render_overview_tab()
+        _render_power_curve_classification_tab()
     with tab2:
-        _render_power_curve_tab()
+        _render_overview_tab()
     with tab3:
-        _render_timeline_tab()
+        _render_power_curve_tab()
     with tab4:
-        _render_diagnostic_tab()
+        _render_timeline_tab()
     with tab5:
-        _render_kpi_summary_tab()
+        _render_diagnostic_tab()
     with tab6:
+        _render_kpi_summary_tab()
+    with tab7:
         _render_turbine_overview_tab()
 
 
