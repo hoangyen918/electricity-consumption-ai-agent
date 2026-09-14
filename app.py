@@ -16,6 +16,7 @@ from tools.turbine_diagnostic_tools import (
     diagnose_theoretical_power_deviation, OPST_LABELS, calculate_turbine_kpis,
     calculate_loss_by_category, get_yaw_error, _compute_reachable_power_per_row,
     _detect_site, _power_wind_columns, CLASSIFICATION_LABELS,
+    _TBA_UNAVAILABLE_LABELS, _TBA_EXCLUDED_LABELS, _infer_interval_hours,
 )
 from agent.turbine_tool_wrappers import (
     group_anomaly_windows_for_agent, get_or_compute_power_curve, get_or_compute_classification,
@@ -1264,6 +1265,170 @@ def _render_temporal_heatmap_tab():
     )
 
 
+_MONTH_OF_YEAR_LABELS = [
+    "01-Jan", "02-Feb", "03-Mar", "04-Apr", "05-May", "06-Jun",
+    "07-Jul", "08-Aug", "09-Sep", "10-Oct", "11-Nov", "12-Dec",
+]
+
+
+def _render_runtime_analysis_tab():
+    """Tab MOI (vi tri thu 4) — 2 chart:
+    (1) Runtime THAT SU hoat dong (Power Production) theo tung thang-nam — TAI DUNG
+    DUNG dinh nghia "available" cua TBA trong calculate_turbine_kpis(): counted = nhan
+    KHONG thuoc _TBA_EXCLUDED_LABELS ({"Measurement Error"}), operating = counted VA
+    KHONG thuoc _TBA_UNAVAILABLE_LABELS ({"Stop","Partial Stop"}) — KHONG tu dinh nghia
+    lai tap nhan, import THANG 2 constant nay tu tools/turbine_diagnostic_tools.py.
+    (2) Power curve nhieu duong, toggle nhom theo "thang-trong-nam" (<=12 duong, mau
+    qualitative phan biet) hoac "tung thang-nam cu the" (toi 60 duong, mau sequential
+    Viridis theo thu tu thoi gian cu->moi de thay xu huong drift).
+
+    Ca 2 chart dung CHUNG bin_width tu estimate_power_curve() (qua get_or_compute_
+    power_curve) — KHONG tao bin moi khac, nhat quan voi Power Curve chart va Heatmap
+    tab. O/doan duong <HEATMAP_MIN_POINTS_PER_CELL (30) diem -> de trong (NaN), TAI
+    DUNG dung nguong da dinh nghia o tab Heatmap thay vi tu chon nguong khac.
+    """
+    st.subheader("⏱️ Runtime Analysis")
+    manager = _get_wind_turbine_manager()
+    selected = st.selectbox("Chọn turbine:", list(WIND_TURBINE_DATASET_PATHS.keys()), key="runtime_dataset_select")
+
+    if not _ensure_wind_turbine_dataset_loaded(manager, selected):
+        return
+
+    df = manager.get_dataframe(selected)
+    site = _detect_site(df)
+    if site is None:
+        st.error("Không nhận diện được cấu trúc turbine gió cho dataset này.")
+        return
+    if "datetime" not in df.columns:
+        st.warning("Dataset không có cột 'datetime' đã derive — không thể vẽ các chart theo thời gian.")
+        return
+
+    power_column, wind_speed_column = _power_wind_columns(site)
+    setpoint_column = "GT1.SP.ActualSPP" if site == "site1" else None
+
+    with st.spinner("Đang tính power curve + phân loại trạng thái (lần đầu có thể mất vài giây)..."):
+        curve_result = get_or_compute_power_curve(manager, selected, power_column, wind_speed_column, 1.0)
+        if not curve_result["ok"]:
+            st.error(curve_result["error"])
+            return
+        classify_result = get_or_compute_classification(
+            manager, selected, power_column, wind_speed_column, setpoint_column, 1.0,
+        )
+        if not classify_result["ok"]:
+            st.error(classify_result["error"])
+            return
+
+    bin_width = curve_result["data"]["bin_width"]
+    labels_series = pd.Series(classify_result["data"]["classification"])
+    labels_series.index = labels_series.index.astype(df.index.dtype) if len(labels_series) else labels_series.index
+    labels_series = labels_series.reindex(df.index)
+
+    interval_minutes, interval_hours = _infer_interval_hours(df, None)
+    year_month = df["datetime"].dt.to_period("M").astype(str)
+
+    # ---------- Chart 1: Runtime (gio) THAT SU hoat dong, theo tung thang-nam ----------
+    st.markdown("### 📊 Số giờ hoạt động thực tế theo tháng")
+    counted_mask = ~labels_series.isin(_TBA_EXCLUDED_LABELS)
+    operating_mask = counted_mask & (~labels_series.isin(_TBA_UNAVAILABLE_LABELS))
+    runtime_hours = (
+        pd.Series(operating_mask, index=df.index).groupby(year_month).sum().astype(float) * interval_hours
+    ).sort_index()
+
+    runtime_fig = px.bar(
+        x=runtime_hours.index.astype(str), y=runtime_hours.values,
+        labels={"x": "Tháng (YYYY-MM)", "y": "Số giờ hoạt động (h)"},
+        title=f"Số giờ hoạt động thực tế (Power Production) theo tháng — {selected}",
+    )
+    st.plotly_chart(runtime_fig, width="stretch", key=f"runtime_bar_{selected}")
+    st.caption(
+        f"{len(runtime_hours)} tháng có dữ liệu · \"hoạt động\" = nhãn KHÔNG thuộc "
+        f"{sorted(_TBA_UNAVAILABLE_LABELS)} (giống đúng định nghĩa TBA ở calculate_turbine_kpis(), "
+        f"loại {sorted(_TBA_EXCLUDED_LABELS)} khỏi mẫu số) · interval = {interval_minutes:.1f} phút/điểm."
+    )
+
+    # ---------- Chart 2: Power curve nhieu duong, toggle nhom thoi gian ----------
+    st.markdown("### 📈 Power Curve theo nhóm thời gian")
+    group_mode = st.radio(
+        "Nhóm theo:", ["Theo tháng trong năm", "Theo từng tháng-năm cụ thể"],
+        key=f"runtime_group_mode_{selected}", horizontal=True,
+    )
+
+    wind_bin = (df[wind_speed_column].astype(float) // bin_width * bin_width) + bin_width / 2
+    curve_df = pd.DataFrame({
+        "wind_bin_center": wind_bin,
+        "actual_power": df[power_column].astype(float),
+    }).dropna()
+
+    curve_fig = go.Figure()
+    if group_mode == "Theo tháng trong năm":
+        curve_df["group"] = df.loc[curve_df.index, "datetime"].dt.month
+        pivot = curve_df.groupby(["group", "wind_bin_center"]).agg(
+            mean_power=("actual_power", "mean"), n=("actual_power", "count"),
+        ).reset_index()
+        pivot.loc[pivot["n"] < HEATMAP_MIN_POINTS_PER_CELL, "mean_power"] = None
+
+        palette = px.colors.qualitative.Light24
+        present_groups = sorted(pivot["group"].unique())
+        for g in present_groups:
+            sub = pivot[pivot["group"] == g].sort_values("wind_bin_center")
+            curve_fig.add_trace(go.Scatter(
+                x=sub["wind_bin_center"], y=sub["mean_power"], mode="lines",
+                name=_MONTH_OF_YEAR_LABELS[g - 1], line=dict(color=palette[(g - 1) % len(palette)]),
+            ))
+        n_lines = len(present_groups)
+        curve_fig.update_layout(legend_title="Tháng trong năm")
+    else:
+        curve_df["group"] = df.loc[curve_df.index, "datetime"].dt.to_period("M").astype(str)
+        pivot = curve_df.groupby(["group", "wind_bin_center"]).agg(
+            mean_power=("actual_power", "mean"), n=("actual_power", "count"),
+        ).reset_index()
+        pivot.loc[pivot["n"] < HEATMAP_MIN_POINTS_PER_CELL, "mean_power"] = None
+
+        present_groups = sorted(pivot["group"].unique())
+        n_groups = len(present_groups)
+        # Mau SEQUENTIAL theo thu tu thoi gian (cu->nhat, moi->dam), KHONG dung mau roi
+        # rac ngau nhien — voi toi 60 duong, mau roi rac se khong doc duoc gi, con
+        # sequential giup thay xu huong drift qua thoi gian du khong phan biet tung
+        # duong rieng le (dung y het task yeu cau).
+        if n_groups > 1:
+            colors = px.colors.sample_colorscale(
+                px.colors.sequential.Viridis, [i / (n_groups - 1) for i in range(n_groups)],
+            )
+        else:
+            colors = [px.colors.sequential.Viridis[-1]]
+        for g, color in zip(present_groups, colors):
+            sub = pivot[pivot["group"] == g].sort_values("wind_bin_center")
+            curve_fig.add_trace(go.Scatter(
+                x=sub["wind_bin_center"], y=sub["mean_power"], mode="lines",
+                name=g, line=dict(color=color), showlegend=(n_groups <= 12),
+            ))
+        n_lines = n_groups
+        curve_fig.update_layout(legend_title="Tháng-năm" if n_groups <= 12 else None)
+        if n_groups > 12:
+            # >12 duong: legend qua dai khong doc duoc — thay bang 1 colorbar lien tuc
+            # (trace vo hinh, marker.size=0) the hien truc thoi gian cu->moi.
+            curve_fig.add_trace(go.Scatter(
+                x=[None], y=[None], mode="markers",
+                marker=dict(
+                    colorscale="Viridis", cmin=0, cmax=1, color=[0],
+                    colorbar=dict(title="Thời gian", tickvals=[0, 1], ticktext=[present_groups[0], present_groups[-1]]),
+                    size=0.1,
+                ),
+                showlegend=False, hoverinfo="skip",
+            ))
+
+    curve_fig.update_layout(
+        title=f"Power Curve theo nhóm thời gian ({group_mode}) — {selected}",
+        xaxis_title="Wind Speed (m/s)", yaxis_title=f"Power ({power_column})",
+    )
+    st.plotly_chart(curve_fig, width="stretch", key=f"runtime_curve_{selected}_{group_mode}")
+    st.caption(
+        f"{n_lines} đường ({group_mode}). Đoạn đường để trống (gap) = bin có "
+        f"< {HEATMAP_MIN_POINTS_PER_CELL} điểm dữ liệu trong đúng nhóm thời gian đó, "
+        f"không đủ tin cậy để vẽ."
+    )
+
+
 def _render_timeline_tab():
     st.subheader("🕐 Timeline các khoảng thời gian bất thường")
     manager = _get_wind_turbine_manager()
@@ -1577,10 +1742,10 @@ def _render_turbine_overview_tab():
 
 
 def render_wind_turbine_dashboard():
-    tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+    tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
         "🏭 Wind Farm Level", "📈 Power Curve & Trạng Thái", "🗓️ Biến động Power Curve theo Thời gian",
-        "📋 Tổng quan", "📈 Power Curve", "🕐 Timeline", "🔍 Diagnostic", "📊 KPI Summary",
-        "🔍 Overview theo Turbine",
+        "⏱️ Runtime Analysis", "📋 Tổng quan", "📈 Power Curve", "🕐 Timeline", "🔍 Diagnostic",
+        "📊 KPI Summary", "🔍 Overview theo Turbine",
     ])
     with tab0:
         _render_wind_farm_level_tab()
@@ -1589,16 +1754,18 @@ def render_wind_turbine_dashboard():
     with tab2:
         _render_temporal_heatmap_tab()
     with tab3:
-        _render_overview_tab()
+        _render_runtime_analysis_tab()
     with tab4:
-        _render_power_curve_tab()
+        _render_overview_tab()
     with tab5:
-        _render_timeline_tab()
+        _render_power_curve_tab()
     with tab6:
-        _render_diagnostic_tab()
+        _render_timeline_tab()
     with tab7:
-        _render_kpi_summary_tab()
+        _render_diagnostic_tab()
     with tab8:
+        _render_kpi_summary_tab()
+    with tab9:
         _render_turbine_overview_tab()
 
 
