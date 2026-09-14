@@ -955,40 +955,28 @@ def detect_anomalies_ml(
     vượt gate, tự động fallback về detect_statistical_anomalies() nguyên bản (rule-based)
     — người gọi tool KHÔNG cần biết đằng sau dùng ML hay rule-based.
 
-    ĐÃ VALIDATE THẬT (2026-09-08) trên cả 2 site GT1/WT1 — KẾT QUẢ: **Gate 4a FAIL cả
-    2 site**, mặc dù kiểm tra ý nghĩa vật lý riêng lẻ PASS (7/10 và 5/10 điểm IF-flag-
-    riêng có classification != Normal). Chi tiết:
-    - GT1: overlap=0.00% (z-score threshold=3.0 trên GT1.Grid.totW flag ĐÚNG 0 điểm
-      trong toàn bộ 233.953 dòng — không phải bug, do std cột này (~1530) quá lớn so
-      với range thực tế (-44.5 → 4525.2), nên |z|>3 không bao giờ xảy ra — baseline
-      z-score bị suy biến cho chính cột/ngưỡng này, không phải IF kém).
-    - WT1: overlap=5.38% (5.150/95.788 điểm IF-flag trùng z-score) — xa dưới 80%.
+    ĐÃ VALIDATE THẬT trên cả 2 site GT1/WT1, thử LẠI 2 LẦN với feature khác nhau (+ 1 lần
+    thử K-Means không cùng họ thuật toán, không dùng gate) — **Gate 4a FAIL cả 2 lần đo,
+    cả 2 site, mọi biến thể feature đã thử**. Chi tiết đầy đủ (feature, gate, số liệu,
+    nguyên nhân thất bại từng lần, so sánh K-Means, cách tái tạo) xem
+    docs/findings/finding_02_unsupervised_ml_anomaly_detection.md.
+
+    GHI CHÚ LỊCH SỬ (số liệu lần đo 2026-09-08, giữ nguyên văn để không xóa dấu vết —
+    KHÔNG PHẢI số chính thức hiện tại, xem finding_02.md): GT1 overlap=0.00% (z-score
+    threshold=3.0 trên GT1.Grid.totW flag ĐÚNG 0 điểm trong 233.953 dòng — do std cột
+    này (~1530) quá lớn so range thực tế (-44.5 → 4525.2) nên |z|>3 không bao giờ xảy
+    ra, baseline suy biến, không phải IF kém). WT1 overlap=5.38% (5.150/95.788 điểm).
+    Đo lại 2026-09-11 trên venv vừa cài lại scikit-learn (môi trường khác lần đầu, vì
+    venv dự án không hề có sklearn cho tới lúc đó): GT1 khớp TUYỆT ĐỐI (0.00%, meaningful
+    7/10), WT1 KHÔNG khớp bit-for-bit (4.51% thay vì 5.38%) — IsolationForest không đảm
+    bảo tái lập bit-for-bit giữa các phiên bản sklearn dù cùng random_state=42. Kết luận
+    định tính (Gate 4a fail xa ngưỡng 80%) không đổi giữa 2 lần đo. Số đo lại 2026-09-11
+    là số CHÍNH THỨC hiện tại (có script tái tạo, xem finding_02.md mục 3.1).
+
     Hàm này VẪN implement ĐẦY ĐỦ logic Isolation Forest + gate-check THẬT (không
     hardcode nhánh fallback) để tổng quát cho dataset khác có thể vượt gate trong
     tương lai — nhưng trên GT1/WT1 hiện tại, kết quả THỰC TẾ khi gọi hàm này sẽ LUÔN
     là fallback, vì gate thất bại thật, không phải giả lập.
-
-    THỬ LẠI LẦN 2 (2026-09-11, script khảo sát KHÔNG commit vào repo, KHÔNG tích hợp
-    vào hàm này — chỉ ghi nhận kết quả): train Isolation Forest trên deviation_from_curve
-    (residual = power - median_power_tại_bin, TÁI DÙNG đúng công thức classify_turbine_
-    status() dùng) thay vì (power, wind_speed) thô, thử cả 2 biến thể 1D (chỉ deviation)
-    và 2D (deviation + wind_speed), so với 2 baseline z-score ĐỘC LẬP (z-score trên power
-    thô — như lần 1; VÀ z-score MỚI trên chính deviation_from_curve). KẾT QUẢ: **Gate 4a
-    VẪN FAIL cả 4 tổ hợp** (2 site × 2 biến thể) — overlap 0.00%-5.97%, xa dưới 80%:
-    - GT1: baseline z-score-trên-deviation KHÔNG còn suy biến như baseline z-score-trên-
-      power (flag 1.43% điểm thay vì 0%) — nhưng overlap với IF vẫn chỉ 4.35%-5.97%.
-    - WT1: overlap 2.44%-5.24% (baseline power) và 2.61%-3.84% (baseline deviation).
-    NGUYÊN NHÂN CẤU TRÚC (không chỉ do chọn sai feature): contamination ước lượng từ %
-    không-Normal trong classification cao bất thường (22.85% GT1, 28.10% WT1) vì gồm cả
-    trạng thái vận hành hợp lệ (Curtailment/Stop/Partial Stop...), không chỉ điểm bất
-    thường thật — buộc Isolation Forest flag 24%-37% tổng số điểm, trong khi z-score chỉ
-    flag <2% (đuôi cực trị thống kê). 2 phương pháp đo 2 khái niệm khác nhau về bản chất
-    ("~1/4-1/3 dữ liệu lệch nhẹ" vs "điểm cực trị hiếm") nên overlap thấp gần như là hệ
-    quả tất yếu của cách ước lượng contamination hiện tại, không chỉ do không gian
-    feature. Đây là BẰNG CHỨNG THỨ 2 (độc lập với lần 1, feature khác hẳn) củng cố quyết
-    định KHÔNG dùng ML cho phát hiện bất thường trên 2 dataset này — nếu muốn thử lại lần
-    3, nên xem xét đổi cách ước lượng contamination (vd percentile cố định thay vì %
-    không-Normal) trước khi đổi feature lần nữa.
 
     classification: dict {row_index: label} từ classify_turbine_status() (TÁI DÙNG,
     không tính lại) — dùng để (a) lọc tập "Normal" làm train set, (b) ước lượng
