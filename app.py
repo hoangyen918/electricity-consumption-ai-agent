@@ -4,6 +4,7 @@ import re
 import tempfile
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -1123,6 +1124,146 @@ def _render_power_curve_classification_tab():
         )
 
 
+# So diem toi thieu de 1 o (thang x wind_bin) duoc to mau gap — tham khao thuc hanh
+# "chi hien thi bin >=30 diem" pho bien trong nghien cuu wind shear power production.
+# O co it hon nguong nay de TRONG/xam (khong to mau), tranh 1 o chi 2-3 diem ngau nhien
+# trong giong "van de nghiem trong" ngang hang o co hang nghin diem.
+HEATMAP_MIN_POINTS_PER_CELL = 30
+
+
+def _render_temporal_heatmap_tab():
+    """Tab MOI (vi tri thu 3) — heatmap bien dong power curve theo thoi gian: rows=thang
+    (YYYY-MM), cols=wind speed bin, mau theo abs(power_gap) (xanh/vang/do theo DO LON,
+    KHONG phan biet huong), hover text rieng ghi ro DAU that cua gap (vuot ly thuyet vs
+    thieu cong suat) de khong gop nham 2 tinh huong khac nhau (xem finding_01.md — GT1
+    co truong hop actual VUOT TheoActiveW o gio thap, khac ban chat voi thieu cong suat
+    that) vao cung 1 mau do ma khong phan biet duoc.
+
+    power_gap = reachable_power - actual (TAI DUNG _compute_reachable_power_per_row(),
+    KHONG viet lai cong thuc — Site 1 dung TRUC TIEP GT1.Common.TheoActiveW, Site 2 noi
+    suy tu power_curve, dung y het calculate_loss_by_category()/calculate_turbine_kpis()
+    dang dung). gap > 0 nghia la actual THAP HON reachable (thieu cong suat that); gap <
+    0 nghia la actual VUOT reachable (vuot ly thuyet, hien tuong da biet o finding_01.md).
+    """
+    st.subheader("🗓️ Biến động Power Curve theo Thời gian")
+    manager = _get_wind_turbine_manager()
+    selected = st.selectbox("Chọn turbine:", list(WIND_TURBINE_DATASET_PATHS.keys()), key="heatmap_dataset_select")
+
+    if not _ensure_wind_turbine_dataset_loaded(manager, selected):
+        return
+
+    df = manager.get_dataframe(selected)
+    site = _detect_site(df)
+    if site is None:
+        st.error("Không nhận diện được cấu trúc turbine gió cho dataset này.")
+        return
+    if "datetime" not in df.columns:
+        st.warning("Dataset không có cột 'datetime' đã derive — không thể vẽ heatmap theo thời gian.")
+        return
+
+    power_column, wind_speed_column = _power_wind_columns(site)
+    theoretical_power_column = (
+        "GT1.Common.TheoActiveW" if site == "site1" and "GT1.Common.TheoActiveW" in df.columns else None
+    )
+
+    # TAI DUNG cache chung voi cac tab khac — xem comment giai thich chi tiet trong
+    # _render_power_curve_tab(). bin_width lay TU curve_result (nhat quan voi power
+    # curve chart), khong hardcode rieng o day.
+    with st.spinner("Đang tính power curve (lần đầu có thể mất vài giây)..."):
+        curve_result = get_or_compute_power_curve(manager, selected, power_column, wind_speed_column, 1.0)
+        if not curve_result["ok"]:
+            st.error(curve_result["error"])
+            return
+
+    bin_width = curve_result["data"]["bin_width"]
+    reachable_per_row, _method_used = _compute_reachable_power_per_row(
+        df, theoretical_power_column, curve_result["data"], wind_speed_column,
+    )
+
+    work_df = pd.DataFrame({
+        "year_month": df["datetime"].dt.to_period("M").astype(str),
+        "wind_bin": (df[wind_speed_column].astype(float) // bin_width * bin_width),
+        "actual_power": df[power_column].astype(float),
+        "power_gap": reachable_per_row.astype(float) - df[power_column].astype(float),
+    }).dropna(subset=["wind_bin", "actual_power", "power_gap"])
+
+    grouped = work_df.groupby(["year_month", "wind_bin"]).agg(
+        mean_actual_power=("actual_power", "mean"),
+        mean_gap=("power_gap", "mean"),
+        n_points=("actual_power", "count"),
+    ).reset_index()
+
+    # O co < HEATMAP_MIN_POINTS_PER_CELL diem -> xoa gia tri (thanh NaN sau pivot) DE
+    # TRONG/xam, khong to mau gap gia tao tu qua it diem.
+    sparse_mask = grouped["n_points"] < HEATMAP_MIN_POINTS_PER_CELL
+    n_sparse_cells = int(sparse_mask.sum())
+    grouped.loc[sparse_mask, ["mean_actual_power", "mean_gap"]] = None
+
+    actual_pivot = grouped.pivot(index="year_month", columns="wind_bin", values="mean_actual_power").sort_index()
+    gap_pivot = grouped.pivot(index="year_month", columns="wind_bin", values="mean_gap").reindex(index=actual_pivot.index)
+    npoints_pivot = grouped.pivot(index="year_month", columns="wind_bin", values="n_points").reindex(index=actual_pivot.index)
+    abs_gap_pivot = gap_pivot.abs()
+
+    wind_bin_labels = [f"{b:g}-{b + bin_width:g}" for b in actual_pivot.columns]
+
+    rows, cols = actual_pivot.shape
+    direction = np.where(
+        gap_pivot.values > 0, "thiếu công suất",
+        np.where(gap_pivot.values < 0, "vượt lý thuyết", "—"),
+    )
+    # Format SAN thanh string trong Python (khong dua vao d3-format ":+.0f" cua Plotly
+    # trong hovertemplate) — da phat hien THAT qua kiem tra browser: voi customdata dtype
+    # object, ":+.0f" khong duoc ap dung (hien nguyen float day so thap phan, khong dau,
+    # khong lam tron), trong khi ":.0f" (khong co dau +) tren customdata[0] lai chay dung
+    # — tranh phu thuoc vao hanh vi format nay, tu format san cho chac chan.
+    actual_str = np.vectorize(lambda v: "" if pd.isna(v) else f"{v:.0f}")(actual_pivot.values)
+    gap_str = np.vectorize(lambda v: "" if pd.isna(v) else f"{v:+.0f}")(gap_pivot.values)
+    npoints_str = np.vectorize(lambda v: "" if pd.isna(v) else f"{v:.0f}")(npoints_pivot.values)
+
+    customdata = np.empty((rows, cols, 4), dtype=object)
+    customdata[..., 0] = actual_str
+    customdata[..., 1] = gap_str
+    customdata[..., 2] = direction
+    customdata[..., 3] = npoints_str
+
+    heatmap_fig = go.Figure(data=go.Heatmap(
+        z=abs_gap_pivot.values,
+        x=wind_bin_labels, y=list(actual_pivot.index),
+        colorscale=[[0, "green"], [0.5, "yellow"], [1, "red"]],
+        customdata=customdata,
+        hoverongaps=False,
+        hovertemplate=(
+            "Tháng: %{y}<br>Gió: %{x} m/s<br>"
+            "Actual TB: %{customdata[0]} kW<br>"
+            "Gap: %{customdata[1]} kW (%{customdata[2]})<br>"
+            "Số điểm: %{customdata[3]}<extra></extra>"
+        ),
+        colorbar=dict(title="|Gap| (kW)"),
+    ))
+    heatmap_fig.update_layout(
+        title=f"Biến động Power Curve theo Thời gian — {selected}",
+        # type="category" BAT BUOC tren ca 2 truc — da phat hien THAT qua kiem tra bang
+        # browser: Plotly tu suy dien nham nhan wind-bin dang "13-14" thanh gio/ngay
+        # (vd "13:14") va nhan thang "2024-07" thanh ngay, khien heatmap render TRONG
+        # (truc bi keo gian sang thang do/microgiay, khong con diem du lieu nao trong
+        # pham vi hien thi). type="category" ep Plotly coi moi nhan la 1 muc roi rac,
+        # khong tu suy dien kieu du lieu.
+        xaxis=dict(title="Dải tốc độ gió (m/s)", type="category"),
+        yaxis=dict(title="Tháng (YYYY-MM)", type="category"),
+        plot_bgcolor="#e0e0e0",
+    )
+    st.plotly_chart(heatmap_fig, width="stretch", key=f"heatmap_{selected}")
+
+    st.caption(
+        f"Màu theo ĐỘ LỚN |gap| (xanh=nhỏ, đỏ=lớn) — di chuột vào từng ô để xem DẤU thật "
+        f"của gap ('vượt lý thuyết' vs 'thiếu công suất', xem finding_01.md về trường hợp "
+        f"vượt lý thuyết đã biết ở GT1 gió thấp). Ô màu xám/trống: dưới "
+        f"{HEATMAP_MIN_POINTS_PER_CELL} điểm dữ liệu ({n_sparse_cells}/{len(grouped)} ô "
+        f"trong tổng {len(actual_pivot.index)} tháng × {len(actual_pivot.columns)} dải gió "
+        f"— không đủ tin cậy để tô màu)."
+    )
+
+
 def _render_timeline_tab():
     st.subheader("🕐 Timeline các khoảng thời gian bất thường")
     manager = _get_wind_turbine_manager()
@@ -1436,25 +1577,28 @@ def _render_turbine_overview_tab():
 
 
 def render_wind_turbine_dashboard():
-    tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-        "🏭 Wind Farm Level", "📈 Power Curve & Trạng Thái", "📋 Tổng quan", "📈 Power Curve",
-        "🕐 Timeline", "🔍 Diagnostic", "📊 KPI Summary", "🔍 Overview theo Turbine",
+    tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+        "🏭 Wind Farm Level", "📈 Power Curve & Trạng Thái", "🗓️ Biến động Power Curve theo Thời gian",
+        "📋 Tổng quan", "📈 Power Curve", "🕐 Timeline", "🔍 Diagnostic", "📊 KPI Summary",
+        "🔍 Overview theo Turbine",
     ])
     with tab0:
         _render_wind_farm_level_tab()
     with tab1:
         _render_power_curve_classification_tab()
     with tab2:
-        _render_overview_tab()
+        _render_temporal_heatmap_tab()
     with tab3:
-        _render_power_curve_tab()
+        _render_overview_tab()
     with tab4:
-        _render_timeline_tab()
+        _render_power_curve_tab()
     with tab5:
-        _render_diagnostic_tab()
+        _render_timeline_tab()
     with tab6:
-        _render_kpi_summary_tab()
+        _render_diagnostic_tab()
     with tab7:
+        _render_kpi_summary_tab()
+    with tab8:
         _render_turbine_overview_tab()
 
 
