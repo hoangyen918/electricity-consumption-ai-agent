@@ -9,4 +9,5 @@ storage/chroma/*
 evals/results/*
 data/raw/*
 data/processed/*
+!data/processed/tetouan_clean.csv
 kb/raw/*

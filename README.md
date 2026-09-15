@@ -62,9 +62,20 @@ Chạy `python scripts/ingest_kb.py` trên host TRƯỚC (xem mục Cài đặt 
 lệnh `docker run` bên dưới mount `storage/chroma/` từ host vào container, nên container
 dùng chung dữ liệu đã ingest, không tự ingest lại bên trong.
 
+Tương tự, chạy `python scripts/prepare_data.py` trên host TRƯỚC khi `docker build` (nếu
+chưa mount volume cho `data/processed/`) để dataset Tetouan mặc định có sẵn ngay trong
+image — `.dockerignore` có exception riêng cho `data/processed/tetouan_clean.csv`. Nếu
+dùng `docker compose up` (xem `docker-compose.yml`, đã mount sẵn `./data/processed`),
+không cần bước này/không cần rebuild mỗi lần đổi data — volume tự đồng bộ với host.
+Thiếu cả 2 cách trên, app vẫn chạy được, chỉ là chưa có dataset mặc định — upload CSV/Excel
+qua sidebar lúc đó.
+
 ```bash
 docker build -t electricity-agent .
-docker run -p 8501:8501 --env-file .env -v ${PWD}/storage/chroma:/app/storage/chroma electricity-agent
+docker run -p 8501:8501 --env-file .env \
+  -v ${PWD}/storage/chroma:/app/storage/chroma \
+  -v ${PWD}/data/processed:/app/data/processed \
+  electricity-agent
 ```
 
 ## Cấu trúc thư mục

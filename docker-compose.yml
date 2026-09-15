@@ -7,3 +7,4 @@ services:
       - ./storage/chroma:/app/storage/chroma
       - ./logs:/app/logs
       - ./kb/raw:/app/kb/raw
+      - ./data/processed:/app/data/processed
