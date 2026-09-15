@@ -1158,69 +1158,69 @@ def _render_power_curve_classification_tab():
             st.error(classify_result["error"])
             return
 
-    classification = classify_result["data"]["classification"]
+        classification = classify_result["data"]["classification"]
 
-    # ---------- Phần 1: Power Curve (TÁI DÙNG _build_power_curve_figure, KHÔNG viết lại) ----------
-    st.markdown("### 📈 Power Curve — Actual vs Theoretical")
-    fig, _plot_df, sample_note = _build_power_curve_figure(
-        selected, power_column, wind_speed_column, curve_result, classify_result, df,
-    )
-    if sample_note:
-        st.caption(sample_note)
-    st.plotly_chart(fig, width="stretch", key=f"pcstatus_powercurve_{selected}")
-
-    # ---------- Phần 2: Donut % THỜI GIAN mọi trạng thái (MỚI, có Normal, tổng 100%) ----------
-    # KHÁC donut LOSS (MWh, không Normal) ở tab "Overview theo Turbine" — donut đó tính
-    # từ calculate_loss_by_category(), GIỮ NGUYÊN, không đụng ở đây.
-    st.markdown("### 🍩 Tỷ lệ thời gian theo trạng thái vận hành")
-    label_counts = pd.Series(list(classification.values())).value_counts()
-    label_pct = (label_counts / label_counts.sum() * 100).round(2)
-    ordered_labels = [l for l in CLASSIFICATION_LABELS if l in label_pct.index]
-
-    donut_fig = go.Figure(data=[go.Pie(
-        labels=ordered_labels, values=[label_pct[l] for l in ordered_labels], hole=0.4,
-        marker=dict(colors=[_CLASSIFICATION_STATUS_COLORS.get(l, "#000000") for l in ordered_labels]),
-    )])
-    donut_fig.update_layout(title=f"Tỷ lệ thời gian theo trạng thái — {selected}")
-    st.plotly_chart(donut_fig, width="stretch", key=f"pcstatus_donut_{selected}")
-    st.caption(f"Tổng {label_pct.sum():.2f}% (8 nhãn, bao gồm Normal — khớp 100% trong sai số làm tròn).")
-
-    # ---------- Phần 3: Stacked bar 100% — % thời gian mọi trạng thái THEO THÁNG ----------
-    st.markdown("### 📊 Tỷ lệ thời gian theo trạng thái, theo tháng")
-    if "datetime" not in df.columns:
-        st.warning("Dataset không có cột 'datetime' đã derive — không thể vẽ biểu đồ theo tháng.")
-    else:
-        # Align classification (dict {row_index: label}) voi df.index — CUNG cach lam
-        # nhu _build_power_curve_figure() ben tren, dam bao dung CHUNG 1 nguon phan loai.
-        labels_series = pd.Series(classification)
-        labels_series.index = labels_series.index.astype(df.index.dtype) if len(labels_series) else labels_series.index
-        labels_series = labels_series.reindex(df.index)
-
-        month_periods = df["datetime"].dt.to_period("M").rename("year_month")
-        monthly_counts = pd.crosstab(month_periods, labels_series)
-        monthly_pct = monthly_counts.div(monthly_counts.sum(axis=1), axis=0) * 100
-        monthly_pct_present = monthly_pct[[l for l in ordered_labels if l in monthly_pct.columns]]
-
-        melted = monthly_pct_present.reset_index().melt(
-            id_vars="year_month", var_name="label", value_name="pct",
+        # ---------- Phần 1: Power Curve (TÁI DÙNG _build_power_curve_figure, KHÔNG viết lại) ----------
+        st.markdown("### 📈 Power Curve — Actual vs Theoretical")
+        fig, _plot_df, sample_note = _build_power_curve_figure(
+            selected, power_column, wind_speed_column, curve_result, classify_result, df,
         )
-        melted["year_month"] = melted["year_month"].astype(str)
+        if sample_note:
+            st.caption(sample_note)
+        st.plotly_chart(fig, width="stretch", key=f"pcstatus_powercurve_{selected}")
 
-        monthly_fig = px.bar(
-            melted, x="year_month", y="pct", color="label",
-            color_discrete_map=_CLASSIFICATION_STATUS_COLORS,
-            category_orders={"label": ordered_labels},
-            labels={"year_month": "Tháng (YYYY-MM)", "pct": "Tỷ lệ (%)", "label": "Trạng thái"},
-            title=f"Tỷ lệ thời gian theo trạng thái theo tháng — {selected}",
-        )
-        monthly_fig.update_layout(barmode="stack")
-        st.plotly_chart(monthly_fig, width="stretch", key=f"pcstatus_monthly_{selected}")
+        # ---------- Phần 2: Donut % THỜI GIAN mọi trạng thái (MỚI, có Normal, tổng 100%) ----------
+        # KHÁC donut LOSS (MWh, không Normal) ở tab "Overview theo Turbine" — donut đó tính
+        # từ calculate_loss_by_category(), GIỮ NGUYÊN, không đụng ở đây.
+        st.markdown("### 🍩 Tỷ lệ thời gian theo trạng thái vận hành")
+        label_counts = pd.Series(list(classification.values())).value_counts()
+        label_pct = (label_counts / label_counts.sum() * 100).round(2)
+        ordered_labels = [l for l in CLASSIFICATION_LABELS if l in label_pct.index]
 
-        max_dev = (monthly_pct.sum(axis=1) - 100).abs().max()
-        st.caption(
-            f"{len(monthly_pct)} tháng có dữ liệu · mỗi tháng tổng {monthly_pct.sum(axis=1).mean():.2f}% "
-            f"trung bình (lệch tối đa so 100%: {max_dev:.4f} điểm % — sai số làm tròn)."
-        )
+        donut_fig = go.Figure(data=[go.Pie(
+            labels=ordered_labels, values=[label_pct[l] for l in ordered_labels], hole=0.4,
+            marker=dict(colors=[_CLASSIFICATION_STATUS_COLORS.get(l, "#000000") for l in ordered_labels]),
+        )])
+        donut_fig.update_layout(title=f"Tỷ lệ thời gian theo trạng thái — {selected}")
+        st.plotly_chart(donut_fig, width="stretch", key=f"pcstatus_donut_{selected}")
+        st.caption(f"Tổng {label_pct.sum():.2f}% (8 nhãn, bao gồm Normal — khớp 100% trong sai số làm tròn).")
+
+        # ---------- Phần 3: Stacked bar 100% — % thời gian mọi trạng thái THEO THÁNG ----------
+        st.markdown("### 📊 Tỷ lệ thời gian theo trạng thái, theo tháng")
+        if "datetime" not in df.columns:
+            st.warning("Dataset không có cột 'datetime' đã derive — không thể vẽ biểu đồ theo tháng.")
+        else:
+            # Align classification (dict {row_index: label}) voi df.index — CUNG cach lam
+            # nhu _build_power_curve_figure() ben tren, dam bao dung CHUNG 1 nguon phan loai.
+            labels_series = pd.Series(classification)
+            labels_series.index = labels_series.index.astype(df.index.dtype) if len(labels_series) else labels_series.index
+            labels_series = labels_series.reindex(df.index)
+
+            month_periods = df["datetime"].dt.to_period("M").rename("year_month")
+            monthly_counts = pd.crosstab(month_periods, labels_series)
+            monthly_pct = monthly_counts.div(monthly_counts.sum(axis=1), axis=0) * 100
+            monthly_pct_present = monthly_pct[[l for l in ordered_labels if l in monthly_pct.columns]]
+
+            melted = monthly_pct_present.reset_index().melt(
+                id_vars="year_month", var_name="label", value_name="pct",
+            )
+            melted["year_month"] = melted["year_month"].astype(str)
+
+            monthly_fig = px.bar(
+                melted, x="year_month", y="pct", color="label",
+                color_discrete_map=_CLASSIFICATION_STATUS_COLORS,
+                category_orders={"label": ordered_labels},
+                labels={"year_month": "Tháng (YYYY-MM)", "pct": "Tỷ lệ (%)", "label": "Trạng thái"},
+                title=f"Tỷ lệ thời gian theo trạng thái theo tháng — {selected}",
+            )
+            monthly_fig.update_layout(barmode="stack")
+            st.plotly_chart(monthly_fig, width="stretch", key=f"pcstatus_monthly_{selected}")
+
+            max_dev = (monthly_pct.sum(axis=1) - 100).abs().max()
+            st.caption(
+                f"{len(monthly_pct)} tháng có dữ liệu · mỗi tháng tổng {monthly_pct.sum(axis=1).mean():.2f}% "
+                f"trung bình (lệch tối đa so 100%: {max_dev:.4f} điểm % — sai số làm tròn)."
+            )
 
 
 # So diem toi thieu de 1 o (thang x wind_bin) duoc to mau gap — tham khao thuc hanh
@@ -1268,99 +1268,99 @@ def _render_temporal_heatmap_tab():
     # TAI DUNG cache chung voi cac tab khac — xem comment giai thich chi tiet trong
     # _render_power_curve_tab(). bin_width lay TU curve_result (nhat quan voi power
     # curve chart), khong hardcode rieng o day.
-    with st.spinner("Đang tính power curve (lần đầu có thể mất vài giây)..."):
+    with st.spinner("Đang tính power curve + dựng heatmap (lần đầu có thể mất vài giây)..."):
         curve_result = get_or_compute_power_curve(manager, selected, power_column, wind_speed_column, 1.0)
         if not curve_result["ok"]:
             st.error(curve_result["error"])
             return
 
-    bin_width = curve_result["data"]["bin_width"]
-    reachable_per_row, _method_used = _compute_reachable_power_per_row(
-        df, theoretical_power_column, curve_result["data"], wind_speed_column,
-    )
+        bin_width = curve_result["data"]["bin_width"]
+        reachable_per_row, _method_used = _compute_reachable_power_per_row(
+            df, theoretical_power_column, curve_result["data"], wind_speed_column,
+        )
 
-    work_df = pd.DataFrame({
-        "year_month": df["datetime"].dt.to_period("M").astype(str),
-        "wind_bin": (df[wind_speed_column].astype(float) // bin_width * bin_width),
-        "actual_power": df[power_column].astype(float),
-        "power_gap": reachable_per_row.astype(float) - df[power_column].astype(float),
-    }).dropna(subset=["wind_bin", "actual_power", "power_gap"])
+        work_df = pd.DataFrame({
+            "year_month": df["datetime"].dt.to_period("M").astype(str),
+            "wind_bin": (df[wind_speed_column].astype(float) // bin_width * bin_width),
+            "actual_power": df[power_column].astype(float),
+            "power_gap": reachable_per_row.astype(float) - df[power_column].astype(float),
+        }).dropna(subset=["wind_bin", "actual_power", "power_gap"])
 
-    grouped = work_df.groupby(["year_month", "wind_bin"]).agg(
-        mean_actual_power=("actual_power", "mean"),
-        mean_gap=("power_gap", "mean"),
-        n_points=("actual_power", "count"),
-    ).reset_index()
+        grouped = work_df.groupby(["year_month", "wind_bin"]).agg(
+            mean_actual_power=("actual_power", "mean"),
+            mean_gap=("power_gap", "mean"),
+            n_points=("actual_power", "count"),
+        ).reset_index()
 
-    # O co < HEATMAP_MIN_POINTS_PER_CELL diem -> xoa gia tri (thanh NaN sau pivot) DE
-    # TRONG/xam, khong to mau gap gia tao tu qua it diem.
-    sparse_mask = grouped["n_points"] < HEATMAP_MIN_POINTS_PER_CELL
-    n_sparse_cells = int(sparse_mask.sum())
-    grouped.loc[sparse_mask, ["mean_actual_power", "mean_gap"]] = None
+        # O co < HEATMAP_MIN_POINTS_PER_CELL diem -> xoa gia tri (thanh NaN sau pivot) DE
+        # TRONG/xam, khong to mau gap gia tao tu qua it diem.
+        sparse_mask = grouped["n_points"] < HEATMAP_MIN_POINTS_PER_CELL
+        n_sparse_cells = int(sparse_mask.sum())
+        grouped.loc[sparse_mask, ["mean_actual_power", "mean_gap"]] = None
 
-    actual_pivot = grouped.pivot(index="year_month", columns="wind_bin", values="mean_actual_power").sort_index()
-    gap_pivot = grouped.pivot(index="year_month", columns="wind_bin", values="mean_gap").reindex(index=actual_pivot.index)
-    npoints_pivot = grouped.pivot(index="year_month", columns="wind_bin", values="n_points").reindex(index=actual_pivot.index)
-    abs_gap_pivot = gap_pivot.abs()
+        actual_pivot = grouped.pivot(index="year_month", columns="wind_bin", values="mean_actual_power").sort_index()
+        gap_pivot = grouped.pivot(index="year_month", columns="wind_bin", values="mean_gap").reindex(index=actual_pivot.index)
+        npoints_pivot = grouped.pivot(index="year_month", columns="wind_bin", values="n_points").reindex(index=actual_pivot.index)
+        abs_gap_pivot = gap_pivot.abs()
 
-    wind_bin_labels = [f"{b:g}-{b + bin_width:g}" for b in actual_pivot.columns]
+        wind_bin_labels = [f"{b:g}-{b + bin_width:g}" for b in actual_pivot.columns]
 
-    rows, cols = actual_pivot.shape
-    direction = np.where(
-        gap_pivot.values > 0, "thiếu công suất",
-        np.where(gap_pivot.values < 0, "vượt lý thuyết", "—"),
-    )
-    # Format SAN thanh string trong Python (khong dua vao d3-format ":+.0f" cua Plotly
-    # trong hovertemplate) — da phat hien THAT qua kiem tra browser: voi customdata dtype
-    # object, ":+.0f" khong duoc ap dung (hien nguyen float day so thap phan, khong dau,
-    # khong lam tron), trong khi ":.0f" (khong co dau +) tren customdata[0] lai chay dung
-    # — tranh phu thuoc vao hanh vi format nay, tu format san cho chac chan.
-    actual_str = np.vectorize(lambda v: "" if pd.isna(v) else f"{v:.0f}")(actual_pivot.values)
-    gap_str = np.vectorize(lambda v: "" if pd.isna(v) else f"{v:+.0f}")(gap_pivot.values)
-    npoints_str = np.vectorize(lambda v: "" if pd.isna(v) else f"{v:.0f}")(npoints_pivot.values)
+        rows, cols = actual_pivot.shape
+        direction = np.where(
+            gap_pivot.values > 0, "thiếu công suất",
+            np.where(gap_pivot.values < 0, "vượt lý thuyết", "—"),
+        )
+        # Format SAN thanh string trong Python (khong dua vao d3-format ":+.0f" cua Plotly
+        # trong hovertemplate) — da phat hien THAT qua kiem tra browser: voi customdata dtype
+        # object, ":+.0f" khong duoc ap dung (hien nguyen float day so thap phan, khong dau,
+        # khong lam tron), trong khi ":.0f" (khong co dau +) tren customdata[0] lai chay dung
+        # — tranh phu thuoc vao hanh vi format nay, tu format san cho chac chan.
+        actual_str = np.vectorize(lambda v: "" if pd.isna(v) else f"{v:.0f}")(actual_pivot.values)
+        gap_str = np.vectorize(lambda v: "" if pd.isna(v) else f"{v:+.0f}")(gap_pivot.values)
+        npoints_str = np.vectorize(lambda v: "" if pd.isna(v) else f"{v:.0f}")(npoints_pivot.values)
 
-    customdata = np.empty((rows, cols, 4), dtype=object)
-    customdata[..., 0] = actual_str
-    customdata[..., 1] = gap_str
-    customdata[..., 2] = direction
-    customdata[..., 3] = npoints_str
+        customdata = np.empty((rows, cols, 4), dtype=object)
+        customdata[..., 0] = actual_str
+        customdata[..., 1] = gap_str
+        customdata[..., 2] = direction
+        customdata[..., 3] = npoints_str
 
-    heatmap_fig = go.Figure(data=go.Heatmap(
-        z=abs_gap_pivot.values,
-        x=wind_bin_labels, y=list(actual_pivot.index),
-        colorscale=[[0, "green"], [0.5, "yellow"], [1, "red"]],
-        customdata=customdata,
-        hoverongaps=False,
-        hovertemplate=(
-            "Tháng: %{y}<br>Gió: %{x} m/s<br>"
-            "Actual TB: %{customdata[0]} kW<br>"
-            "Gap: %{customdata[1]} kW (%{customdata[2]})<br>"
-            "Số điểm: %{customdata[3]}<extra></extra>"
-        ),
-        colorbar=dict(title="|Gap| (kW)"),
-    ))
-    heatmap_fig.update_layout(
-        title=f"Biến động Power Curve theo Thời gian — {selected}",
-        # type="category" BAT BUOC tren ca 2 truc — da phat hien THAT qua kiem tra bang
-        # browser: Plotly tu suy dien nham nhan wind-bin dang "13-14" thanh gio/ngay
-        # (vd "13:14") va nhan thang "2024-07" thanh ngay, khien heatmap render TRONG
-        # (truc bi keo gian sang thang do/microgiay, khong con diem du lieu nao trong
-        # pham vi hien thi). type="category" ep Plotly coi moi nhan la 1 muc roi rac,
-        # khong tu suy dien kieu du lieu.
-        xaxis=dict(title="Dải tốc độ gió (m/s)", type="category"),
-        yaxis=dict(title="Tháng (YYYY-MM)", type="category"),
-        plot_bgcolor="#e0e0e0",
-    )
-    st.plotly_chart(heatmap_fig, width="stretch", key=f"heatmap_{selected}")
+        heatmap_fig = go.Figure(data=go.Heatmap(
+            z=abs_gap_pivot.values,
+            x=wind_bin_labels, y=list(actual_pivot.index),
+            colorscale=[[0, "green"], [0.5, "yellow"], [1, "red"]],
+            customdata=customdata,
+            hoverongaps=False,
+            hovertemplate=(
+                "Tháng: %{y}<br>Gió: %{x} m/s<br>"
+                "Actual TB: %{customdata[0]} kW<br>"
+                "Gap: %{customdata[1]} kW (%{customdata[2]})<br>"
+                "Số điểm: %{customdata[3]}<extra></extra>"
+            ),
+            colorbar=dict(title="|Gap| (kW)"),
+        ))
+        heatmap_fig.update_layout(
+            title=f"Biến động Power Curve theo Thời gian — {selected}",
+            # type="category" BAT BUOC tren ca 2 truc — da phat hien THAT qua kiem tra bang
+            # browser: Plotly tu suy dien nham nhan wind-bin dang "13-14" thanh gio/ngay
+            # (vd "13:14") va nhan thang "2024-07" thanh ngay, khien heatmap render TRONG
+            # (truc bi keo gian sang thang do/microgiay, khong con diem du lieu nao trong
+            # pham vi hien thi). type="category" ep Plotly coi moi nhan la 1 muc roi rac,
+            # khong tu suy dien kieu du lieu.
+            xaxis=dict(title="Dải tốc độ gió (m/s)", type="category"),
+            yaxis=dict(title="Tháng (YYYY-MM)", type="category"),
+            plot_bgcolor="#e0e0e0",
+        )
+        st.plotly_chart(heatmap_fig, width="stretch", key=f"heatmap_{selected}")
 
-    st.caption(
-        f"Màu theo ĐỘ LỚN |gap| (xanh=nhỏ, đỏ=lớn) — di chuột vào từng ô để xem DẤU thật "
-        f"của gap ('vượt lý thuyết' vs 'thiếu công suất', xem finding_01.md về trường hợp "
-        f"vượt lý thuyết đã biết ở GT1 gió thấp). Ô màu xám/trống: dưới "
-        f"{HEATMAP_MIN_POINTS_PER_CELL} điểm dữ liệu ({n_sparse_cells}/{len(grouped)} ô "
-        f"trong tổng {len(actual_pivot.index)} tháng × {len(actual_pivot.columns)} dải gió "
-        f"— không đủ tin cậy để tô màu)."
-    )
+        st.caption(
+            f"Màu theo ĐỘ LỚN |gap| (xanh=nhỏ, đỏ=lớn) — di chuột vào từng ô để xem DẤU thật "
+            f"của gap ('vượt lý thuyết' vs 'thiếu công suất', xem finding_01.md về trường hợp "
+            f"vượt lý thuyết đã biết ở GT1 gió thấp). Ô màu xám/trống: dưới "
+            f"{HEATMAP_MIN_POINTS_PER_CELL} điểm dữ liệu ({n_sparse_cells}/{len(grouped)} ô "
+            f"trong tổng {len(actual_pivot.index)} tháng × {len(actual_pivot.columns)} dải gió "
+            f"— không đủ tin cậy để tô màu)."
+        )
 
 
 _MONTH_OF_YEAR_LABELS = [
@@ -1404,6 +1404,12 @@ def _render_runtime_analysis_tab():
     power_column, wind_speed_column = _power_wind_columns(site)
     setpoint_column = "GT1.SP.ActualSPP" if site == "site1" else None
 
+    st.markdown("### 📈 Power Curve theo nhóm thời gian")
+    group_mode = st.radio(
+        "Nhóm theo:", ["Theo tháng trong năm", "Theo từng tháng-năm cụ thể"],
+        key=f"runtime_group_mode_{selected}", horizontal=True,
+    )
+
     with st.spinner("Đang tính power curve + phân loại trạng thái (lần đầu có thể mất vài giây)..."):
         curve_result = get_or_compute_power_curve(manager, selected, power_column, wind_speed_column, 1.0)
         if not curve_result["ok"]:
@@ -1416,115 +1422,109 @@ def _render_runtime_analysis_tab():
             st.error(classify_result["error"])
             return
 
-    bin_width = curve_result["data"]["bin_width"]
-    labels_series = pd.Series(classify_result["data"]["classification"])
-    labels_series.index = labels_series.index.astype(df.index.dtype) if len(labels_series) else labels_series.index
-    labels_series = labels_series.reindex(df.index)
+        bin_width = curve_result["data"]["bin_width"]
+        labels_series = pd.Series(classify_result["data"]["classification"])
+        labels_series.index = labels_series.index.astype(df.index.dtype) if len(labels_series) else labels_series.index
+        labels_series = labels_series.reindex(df.index)
 
-    interval_minutes, interval_hours = _infer_interval_hours(df, None)
-    year_month = df["datetime"].dt.to_period("M").astype(str)
+        interval_minutes, interval_hours = _infer_interval_hours(df, None)
+        year_month = df["datetime"].dt.to_period("M").astype(str)
 
-    # ---------- Chart 1: Runtime (gio) THAT SU hoat dong, theo tung thang-nam ----------
-    st.markdown("### 📊 Số giờ hoạt động thực tế theo tháng")
-    counted_mask = ~labels_series.isin(_TBA_EXCLUDED_LABELS)
-    operating_mask = counted_mask & (~labels_series.isin(_TBA_UNAVAILABLE_LABELS))
-    runtime_hours = (
-        pd.Series(operating_mask, index=df.index).groupby(year_month).sum().astype(float) * interval_hours
-    ).sort_index()
+        # ---------- Chart 1: Runtime (gio) THAT SU hoat dong, theo tung thang-nam ----------
+        st.markdown("### 📊 Số giờ hoạt động thực tế theo tháng")
+        counted_mask = ~labels_series.isin(_TBA_EXCLUDED_LABELS)
+        operating_mask = counted_mask & (~labels_series.isin(_TBA_UNAVAILABLE_LABELS))
+        runtime_hours = (
+            pd.Series(operating_mask, index=df.index).groupby(year_month).sum().astype(float) * interval_hours
+        ).sort_index()
 
-    runtime_fig = px.bar(
-        x=runtime_hours.index.astype(str), y=runtime_hours.values,
-        labels={"x": "Tháng (YYYY-MM)", "y": "Số giờ hoạt động (h)"},
-        title=f"Số giờ hoạt động thực tế (Power Production) theo tháng — {selected}",
-    )
-    st.plotly_chart(runtime_fig, width="stretch", key=f"runtime_bar_{selected}")
-    st.caption(
-        f"{len(runtime_hours)} tháng có dữ liệu · \"hoạt động\" = nhãn KHÔNG thuộc "
-        f"{sorted(_TBA_UNAVAILABLE_LABELS)} (giống đúng định nghĩa TBA ở calculate_turbine_kpis(), "
-        f"loại {sorted(_TBA_EXCLUDED_LABELS)} khỏi mẫu số) · interval = {interval_minutes:.1f} phút/điểm."
-    )
+        runtime_fig = px.bar(
+            x=runtime_hours.index.astype(str), y=runtime_hours.values,
+            labels={"x": "Tháng (YYYY-MM)", "y": "Số giờ hoạt động (h)"},
+            title=f"Số giờ hoạt động thực tế (Power Production) theo tháng — {selected}",
+        )
+        st.plotly_chart(runtime_fig, width="stretch", key=f"runtime_bar_{selected}")
+        st.caption(
+            f"{len(runtime_hours)} tháng có dữ liệu · \"hoạt động\" = nhãn KHÔNG thuộc "
+            f"{sorted(_TBA_UNAVAILABLE_LABELS)} (giống đúng định nghĩa TBA ở calculate_turbine_kpis(), "
+            f"loại {sorted(_TBA_EXCLUDED_LABELS)} khỏi mẫu số) · interval = {interval_minutes:.1f} phút/điểm."
+        )
 
-    # ---------- Chart 2: Power curve nhieu duong, toggle nhom thoi gian ----------
-    st.markdown("### 📈 Power Curve theo nhóm thời gian")
-    group_mode = st.radio(
-        "Nhóm theo:", ["Theo tháng trong năm", "Theo từng tháng-năm cụ thể"],
-        key=f"runtime_group_mode_{selected}", horizontal=True,
-    )
+        # ---------- Chart 2: Power curve nhieu duong, toggle nhom thoi gian ----------
+        wind_bin = (df[wind_speed_column].astype(float) // bin_width * bin_width) + bin_width / 2
+        curve_df = pd.DataFrame({
+            "wind_bin_center": wind_bin,
+            "actual_power": df[power_column].astype(float),
+        }).dropna()
 
-    wind_bin = (df[wind_speed_column].astype(float) // bin_width * bin_width) + bin_width / 2
-    curve_df = pd.DataFrame({
-        "wind_bin_center": wind_bin,
-        "actual_power": df[power_column].astype(float),
-    }).dropna()
+        curve_fig = go.Figure()
+        if group_mode == "Theo tháng trong năm":
+            curve_df["group"] = df.loc[curve_df.index, "datetime"].dt.month
+            pivot = curve_df.groupby(["group", "wind_bin_center"]).agg(
+                mean_power=("actual_power", "mean"), n=("actual_power", "count"),
+            ).reset_index()
+            pivot.loc[pivot["n"] < HEATMAP_MIN_POINTS_PER_CELL, "mean_power"] = None
 
-    curve_fig = go.Figure()
-    if group_mode == "Theo tháng trong năm":
-        curve_df["group"] = df.loc[curve_df.index, "datetime"].dt.month
-        pivot = curve_df.groupby(["group", "wind_bin_center"]).agg(
-            mean_power=("actual_power", "mean"), n=("actual_power", "count"),
-        ).reset_index()
-        pivot.loc[pivot["n"] < HEATMAP_MIN_POINTS_PER_CELL, "mean_power"] = None
-
-        palette = px.colors.qualitative.Light24
-        present_groups = sorted(pivot["group"].unique())
-        for g in present_groups:
-            sub = pivot[pivot["group"] == g].sort_values("wind_bin_center")
-            curve_fig.add_trace(go.Scatter(
-                x=sub["wind_bin_center"], y=sub["mean_power"], mode="lines",
-                name=_MONTH_OF_YEAR_LABELS[g - 1], line=dict(color=palette[(g - 1) % len(palette)]),
-            ))
-        n_lines = len(present_groups)
-        curve_fig.update_layout(legend_title="Tháng trong năm")
-    else:
-        curve_df["group"] = df.loc[curve_df.index, "datetime"].dt.to_period("M").astype(str)
-        pivot = curve_df.groupby(["group", "wind_bin_center"]).agg(
-            mean_power=("actual_power", "mean"), n=("actual_power", "count"),
-        ).reset_index()
-        pivot.loc[pivot["n"] < HEATMAP_MIN_POINTS_PER_CELL, "mean_power"] = None
-
-        present_groups = sorted(pivot["group"].unique())
-        n_groups = len(present_groups)
-        # Mau SEQUENTIAL theo thu tu thoi gian (cu->nhat, moi->dam), KHONG dung mau roi
-        # rac ngau nhien — voi toi 60 duong, mau roi rac se khong doc duoc gi, con
-        # sequential giup thay xu huong drift qua thoi gian du khong phan biet tung
-        # duong rieng le (dung y het task yeu cau).
-        if n_groups > 1:
-            colors = px.colors.sample_colorscale(
-                px.colors.sequential.Viridis, [i / (n_groups - 1) for i in range(n_groups)],
-            )
+            palette = px.colors.qualitative.Light24
+            present_groups = sorted(pivot["group"].unique())
+            for g in present_groups:
+                sub = pivot[pivot["group"] == g].sort_values("wind_bin_center")
+                curve_fig.add_trace(go.Scatter(
+                    x=sub["wind_bin_center"], y=sub["mean_power"], mode="lines",
+                    name=_MONTH_OF_YEAR_LABELS[g - 1], line=dict(color=palette[(g - 1) % len(palette)]),
+                ))
+            n_lines = len(present_groups)
+            curve_fig.update_layout(legend_title="Tháng trong năm")
         else:
-            colors = [px.colors.sequential.Viridis[-1]]
-        for g, color in zip(present_groups, colors):
-            sub = pivot[pivot["group"] == g].sort_values("wind_bin_center")
-            curve_fig.add_trace(go.Scatter(
-                x=sub["wind_bin_center"], y=sub["mean_power"], mode="lines",
-                name=g, line=dict(color=color), showlegend=(n_groups <= 12),
-            ))
-        n_lines = n_groups
-        curve_fig.update_layout(legend_title="Tháng-năm" if n_groups <= 12 else None)
-        if n_groups > 12:
-            # >12 duong: legend qua dai khong doc duoc — thay bang 1 colorbar lien tuc
-            # (trace vo hinh, marker.size=0) the hien truc thoi gian cu->moi.
-            curve_fig.add_trace(go.Scatter(
-                x=[None], y=[None], mode="markers",
-                marker=dict(
-                    colorscale="Viridis", cmin=0, cmax=1, color=[0],
-                    colorbar=dict(title="Thời gian", tickvals=[0, 1], ticktext=[present_groups[0], present_groups[-1]]),
-                    size=0.1,
-                ),
-                showlegend=False, hoverinfo="skip",
-            ))
+            curve_df["group"] = df.loc[curve_df.index, "datetime"].dt.to_period("M").astype(str)
+            pivot = curve_df.groupby(["group", "wind_bin_center"]).agg(
+                mean_power=("actual_power", "mean"), n=("actual_power", "count"),
+            ).reset_index()
+            pivot.loc[pivot["n"] < HEATMAP_MIN_POINTS_PER_CELL, "mean_power"] = None
 
-    curve_fig.update_layout(
-        title=f"Power Curve theo nhóm thời gian ({group_mode}) — {selected}",
-        xaxis_title="Wind Speed (m/s)", yaxis_title=f"Power ({power_column})",
-    )
-    st.plotly_chart(curve_fig, width="stretch", key=f"runtime_curve_{selected}_{group_mode}")
-    st.caption(
-        f"{n_lines} đường ({group_mode}). Đoạn đường để trống (gap) = bin có "
-        f"< {HEATMAP_MIN_POINTS_PER_CELL} điểm dữ liệu trong đúng nhóm thời gian đó, "
-        f"không đủ tin cậy để vẽ."
-    )
+            present_groups = sorted(pivot["group"].unique())
+            n_groups = len(present_groups)
+            # Mau SEQUENTIAL theo thu tu thoi gian (cu->nhat, moi->dam), KHONG dung mau roi
+            # rac ngau nhien — voi toi 60 duong, mau roi rac se khong doc duoc gi, con
+            # sequential giup thay xu huong drift qua thoi gian du khong phan biet tung
+            # duong rieng le (dung y het task yeu cau).
+            if n_groups > 1:
+                colors = px.colors.sample_colorscale(
+                    px.colors.sequential.Viridis, [i / (n_groups - 1) for i in range(n_groups)],
+                )
+            else:
+                colors = [px.colors.sequential.Viridis[-1]]
+            for g, color in zip(present_groups, colors):
+                sub = pivot[pivot["group"] == g].sort_values("wind_bin_center")
+                curve_fig.add_trace(go.Scatter(
+                    x=sub["wind_bin_center"], y=sub["mean_power"], mode="lines",
+                    name=g, line=dict(color=color), showlegend=(n_groups <= 12),
+                ))
+            n_lines = n_groups
+            curve_fig.update_layout(legend_title="Tháng-năm" if n_groups <= 12 else None)
+            if n_groups > 12:
+                # >12 duong: legend qua dai khong doc duoc — thay bang 1 colorbar lien tuc
+                # (trace vo hinh, marker.size=0) the hien truc thoi gian cu->moi.
+                curve_fig.add_trace(go.Scatter(
+                    x=[None], y=[None], mode="markers",
+                    marker=dict(
+                        colorscale="Viridis", cmin=0, cmax=1, color=[0],
+                        colorbar=dict(title="Thời gian", tickvals=[0, 1], ticktext=[present_groups[0], present_groups[-1]]),
+                        size=0.1,
+                    ),
+                    showlegend=False, hoverinfo="skip",
+                ))
+
+        curve_fig.update_layout(
+            title=f"Power Curve theo nhóm thời gian ({group_mode}) — {selected}",
+            xaxis_title="Wind Speed (m/s)", yaxis_title=f"Power ({power_column})",
+        )
+        st.plotly_chart(curve_fig, width="stretch", key=f"runtime_curve_{selected}_{group_mode}")
+        st.caption(
+            f"{n_lines} đường ({group_mode}). Đoạn đường để trống (gap) = bin có "
+            f"< {HEATMAP_MIN_POINTS_PER_CELL} điểm dữ liệu trong đúng nhóm thời gian đó, "
+            f"không đủ tin cậy để vẽ."
+        )
 
 
 def _render_timeline_tab():
@@ -1652,187 +1652,187 @@ def _render_turbine_overview_tab():
             st.error(classify_result["error"])
             return
 
-    # ---------- Phần 2: Power Curve (TÁI DÙNG _build_power_curve_figure, KHÔNG viết lại) ----------
-    st.markdown("### 📈 Power Curve")
-    fig, plot_df, sample_note = _build_power_curve_figure(
-        selected, power_column, wind_speed_column, curve_result, classify_result, df,
-    )
-    if sample_note:
-        st.caption(sample_note)
-    st.plotly_chart(fig, width="stretch", key=f"overview_powercurve_{selected}")
+        # ---------- Phần 2: Power Curve (TÁI DÙNG _build_power_curve_figure, KHÔNG viết lại) ----------
+        st.markdown("### 📈 Power Curve")
+        fig, plot_df, sample_note = _build_power_curve_figure(
+            selected, power_column, wind_speed_column, curve_result, classify_result, df,
+        )
+        if sample_note:
+            st.caption(sample_note)
+        st.plotly_chart(fig, width="stretch", key=f"overview_powercurve_{selected}")
 
-    # ---------- Phần 3: Bảng KPI (TÁI DÙNG calculate_turbine_kpis, KHÔNG tính lại) ----------
-    kpi_result = calculate_turbine_kpis(
-        manager, dataset_name=selected, power_column=power_column, wind_speed_column=wind_speed_column,
-        classification=classify_result["data"]["classification"], power_curve=curve_result["data"],
-        theoretical_power_column=theoretical_power_column,
-    )
-    if not kpi_result["ok"]:
-        st.error(kpi_result["error"])
-        return
-    kpi_data = kpi_result["data"]
+        # ---------- Phần 3: Bảng KPI (TÁI DÙNG calculate_turbine_kpis, KHÔNG tính lại) ----------
+        kpi_result = calculate_turbine_kpis(
+            manager, dataset_name=selected, power_column=power_column, wind_speed_column=wind_speed_column,
+            classification=classify_result["data"]["classification"], power_curve=curve_result["data"],
+            theoretical_power_column=theoretical_power_column,
+        )
+        if not kpi_result["ok"]:
+            st.error(kpi_result["error"])
+            return
+        kpi_data = kpi_result["data"]
 
-    st.markdown("### 📊 KPI")
-    method_label = "Trực tiếp (TheoActiveW)" if kpi_data["method"] == "direct_theoretical" else "Ước lượng (power curve)"
-    st.caption(f"Reachable energy: **{method_label}**")
+        st.markdown("### 📊 KPI")
+        method_label = "Trực tiếp (TheoActiveW)" if kpi_data["method"] == "direct_theoretical" else "Ước lượng (power curve)"
+        st.caption(f"Reachable energy: **{method_label}**")
 
-    col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric("Production (MWh)", f"{kpi_data['production_mwh']:,.1f}")
-    col2.metric("Reachable (MWh)", f"{kpi_data['reachable_mwh']:,.1f}")
-    col3.metric("Losses (%)", f"{kpi_data['losses_pct']:.2f}%" if kpi_data["losses_pct"] is not None else "N/A")
-    col4.metric("TBA (%)", f"{kpi_data['tba_pct']:.2f}%" if kpi_data["tba_pct"] is not None else "N/A")
-    col5.metric("PBA (%)", f"{kpi_data['pba_pct']:.2f}%" if kpi_data["pba_pct"] is not None else "N/A")
+        col1, col2, col3, col4, col5 = st.columns(5)
+        col1.metric("Production (MWh)", f"{kpi_data['production_mwh']:,.1f}")
+        col2.metric("Reachable (MWh)", f"{kpi_data['reachable_mwh']:,.1f}")
+        col3.metric("Losses (%)", f"{kpi_data['losses_pct']:.2f}%" if kpi_data["losses_pct"] is not None else "N/A")
+        col4.metric("TBA (%)", f"{kpi_data['tba_pct']:.2f}%" if kpi_data["tba_pct"] is not None else "N/A")
+        col5.metric("PBA (%)", f"{kpi_data['pba_pct']:.2f}%" if kpi_data["pba_pct"] is not None else "N/A")
 
-    # % theo nhan — TAI DUNG "summary" co san trong classify_result (KHONG tinh lai
-    # value_counts thu cong), va yaw error trung binh (Phan B, get_yaw_error()).
-    label_summary = classify_result["data"]["summary"]
+        # % theo nhan — TAI DUNG "summary" co san trong classify_result (KHONG tinh lai
+        # value_counts thu cong), va yaw error trung binh (Phan B, get_yaw_error()).
+        label_summary = classify_result["data"]["summary"]
 
-    def _pct_for(label: str) -> float | None:
-        entry = label_summary.get(label)
-        return entry["pct"] if entry else None
+        def _pct_for(label: str) -> float | None:
+            entry = label_summary.get(label)
+            return entry["pct"] if entry else None
 
-    yaw_error_series = get_yaw_error(df, site)
-    yaw_mean = float(yaw_error_series.mean()) if yaw_error_series.notna().any() else None
+        yaw_error_series = get_yaw_error(df, site)
+        yaw_mean = float(yaw_error_series.mean()) if yaw_error_series.notna().any() else None
 
-    col6, col7, col8, col9, col10 = st.columns(5)
-    for col, label in zip((col6, col7, col8, col9), ("Normal", "Stop", "Curtailment", "Under Production")):
-        pct = _pct_for(label)
-        col.metric(f"% {label}", f"{pct:.2f}%" if pct is not None else "0.00%")
-    col10.metric("Yaw Error TB (°)", f"{yaw_mean:.2f}°" if yaw_mean is not None else "N/A")
+        col6, col7, col8, col9, col10 = st.columns(5)
+        for col, label in zip((col6, col7, col8, col9), ("Normal", "Stop", "Curtailment", "Under Production")):
+            pct = _pct_for(label)
+            col.metric(f"% {label}", f"{pct:.2f}%" if pct is not None else "0.00%")
+        col10.metric("Yaw Error TB (°)", f"{yaw_mean:.2f}°" if yaw_mean is not None else "N/A")
 
-    if kpi_data.get("tba_note"):
-        st.caption(f"ℹ️ {kpi_data['tba_note']}")
+        if kpi_data.get("tba_note"):
+            st.caption(f"ℹ️ {kpi_data['tba_note']}")
 
-    # ---------- Phần 4: Donut loss theo nhãn (TÁI DÙNG calculate_loss_by_category) ----------
-    st.markdown("### 🍩 Loss theo nhãn")
-    loss_result = calculate_loss_by_category(
-        manager, dataset_name=selected, power_column=power_column, wind_speed_column=wind_speed_column,
-        classification=classify_result["data"]["classification"], power_curve=curve_result["data"],
-        theoretical_power_column=theoretical_power_column,
-    )
-    if not loss_result["ok"]:
-        st.error(loss_result["error"])
-    else:
-        loss_by_category = loss_result["data"]["loss_by_category_mwh"]
-        # Pie KHONG the ve gia tri AM — "Over Production" (va doi khi "Measurement
-        # Error" o Site 2) thuong AM tren du lieu that (nghia la SAN LUONG VUOT ky
-        # vong, khong phai loss That), da do THAT tren GT1/WT1 (2026-09-11): "Over
-        # Production" = -31.77 MWh (GT1), -148.78 MWh (WT1). Tach rieng: donut CHI
-        # ve nhan co loss DUONG, nhan AM hien rieng thanh caption (khong phai bug/
-        # thieu sot, day la ban chat cong thuc loss = reachable-actual co the am).
-        positive_loss = {k: v for k, v in loss_by_category.items() if v > 0}
-        negative_gain = {k: v for k, v in loss_by_category.items() if v <= 0}
-
-        if not positive_loss:
-            st.info("Không có nhãn nào gây loss dương (100% Normal hoặc chỉ có nhãn 'gain') — không có gì để vẽ donut.")
+        # ---------- Phần 4: Donut loss theo nhãn (TÁI DÙNG calculate_loss_by_category) ----------
+        st.markdown("### 🍩 Loss theo nhãn")
+        loss_result = calculate_loss_by_category(
+            manager, dataset_name=selected, power_column=power_column, wind_speed_column=wind_speed_column,
+            classification=classify_result["data"]["classification"], power_curve=curve_result["data"],
+            theoretical_power_column=theoretical_power_column,
+        )
+        if not loss_result["ok"]:
+            st.error(loss_result["error"])
         else:
-            labels_list = list(positive_loss.keys())
-            values_list = list(positive_loss.values())
-            colors = [_CLASSIFICATION_STATUS_COLORS.get(l, "#000000") for l in labels_list]
-            donut_fig = go.Figure(data=[go.Pie(
-                labels=labels_list, values=values_list, hole=0.4,
-                marker=dict(colors=colors),
+            loss_by_category = loss_result["data"]["loss_by_category_mwh"]
+            # Pie KHONG the ve gia tri AM — "Over Production" (va doi khi "Measurement
+            # Error" o Site 2) thuong AM tren du lieu that (nghia la SAN LUONG VUOT ky
+            # vong, khong phai loss That), da do THAT tren GT1/WT1 (2026-09-11): "Over
+            # Production" = -31.77 MWh (GT1), -148.78 MWh (WT1). Tach rieng: donut CHI
+            # ve nhan co loss DUONG, nhan AM hien rieng thanh caption (khong phai bug/
+            # thieu sot, day la ban chat cong thuc loss = reachable-actual co the am).
+            positive_loss = {k: v for k, v in loss_by_category.items() if v > 0}
+            negative_gain = {k: v for k, v in loss_by_category.items() if v <= 0}
+
+            if not positive_loss:
+                st.info("Không có nhãn nào gây loss dương (100% Normal hoặc chỉ có nhãn 'gain') — không có gì để vẽ donut.")
+            else:
+                labels_list = list(positive_loss.keys())
+                values_list = list(positive_loss.values())
+                colors = [_CLASSIFICATION_STATUS_COLORS.get(l, "#000000") for l in labels_list]
+                donut_fig = go.Figure(data=[go.Pie(
+                    labels=labels_list, values=values_list, hole=0.4,
+                    marker=dict(colors=colors),
+                )])
+                donut_fig.update_layout(title=f"Loss theo nhãn (MWh, chỉ nhãn loss dương) — {selected}")
+                st.plotly_chart(donut_fig, width="stretch", key=f"overview_donut_{selected}")
+
+            st.caption(f"Tổng loss (nhãn dương, không tính Normal): {sum(positive_loss.values()):,.1f} MWh.")
+            if negative_gain:
+                gain_text = ", ".join(f"{k}: {v:+,.1f} MWh" for k, v in negative_gain.items())
+                st.caption(
+                    f"ℹ️ Các nhãn sau có tổng ÂM (nghĩa là sản lượng VƯỢT power curve/lý "
+                    f"thuyết ở nhãn đó, không phải loss thật — không vẽ trong donut ở trên): {gain_text}."
+                )
+
+        # ---------- Phần 5: Monthly production (TÁI DÙNG công thức actual_energy trong ----------
+        # ---------- calculate_turbine_kpis: sum(actual)*interval_hours/1000, ÁP DỤNG THEO GROUP) ----------
+        st.markdown("### 📅 Monthly Production")
+        if "datetime" not in df.columns:
+            st.warning("Dataset không có cột 'datetime' đã derive — không thể vẽ biểu đồ theo tháng.")
+        else:
+            interval_hours = kpi_data["interval_minutes"] / 60
+            # TAI DUNG _compute_reachable_power_per_row() CHI de xac dinh valid_mask GIONG
+            # HET calculate_turbine_kpis() dung cho production_mwh (khong phai tinh reachable
+            # de dung, chi de dam bao tap dong duoc tinh la NHAT QUAN voi con so production_mwh
+            # da hien o Phan 3 — tong monthly phai cong don ra dung production_mwh).
+            reachable_per_row, _ = _compute_reachable_power_per_row(
+                df, theoretical_power_column, curve_result["data"], wind_speed_column,
+            )
+            actual_per_row = df[power_column].astype(float)
+            valid_mask = reachable_per_row.notna() & actual_per_row.notna()
+
+            # QUYET DINH (theo DoD): ca 5 dataset deu > 12 thang du lieu that (Site 1 ~26
+            # thang, Site 2 ~60 thang) — neu > 12 thang PHAN BIET (nunique) thi gop theo
+            # YYYY-MM (khong mat thong tin theo nam); nguoc lai (dataset gia dinh ngan hon)
+            # gop theo so thang 1-12 don gian. Tinh DONG (khong hardcode) de dung neu co
+            # dataset moi ngan hon sau nay.
+            month_periods = df["datetime"].dt.to_period("M")
+            distinct_months = month_periods.nunique()
+            if distinct_months > 12:
+                month_key = month_periods.astype(str)  # "YYYY-MM"
+                x_title = "Tháng (YYYY-MM)"
+            else:
+                month_key = df["datetime"].dt.month  # 1-12
+                x_title = "Tháng"
+
+            monthly_mwh = (
+                (actual_per_row[valid_mask] * interval_hours / 1000)
+                .groupby(month_key[valid_mask])
+                .sum()
+                .sort_index()
+            )
+            monthly_fig = px.bar(
+                x=monthly_mwh.index.astype(str), y=monthly_mwh.values,
+                labels={"x": x_title, "y": "Actual Production (MWh)"},
+                title=f"Sản lượng thực tế theo tháng — {selected}",
+            )
+            st.plotly_chart(monthly_fig, width="stretch", key=f"overview_monthly_{selected}")
+            st.caption(
+                f"{distinct_months} tháng có dữ liệu · tổng {monthly_mwh.sum():,.1f} MWh "
+                f"(khớp production_mwh ở Phần KPI: {kpi_data['production_mwh']:,.1f} MWh)."
+            )
+
+            # ---------- Phần 6: Sản lượng tích lũy theo năm (TÁI DÙNG actual_per_row/valid_mask/ ----------
+            # ---------- interval_hours vừa dùng ở Monthly Production — chỉ thêm lọc theo năm + cumsum) ----------
+            st.markdown("### 📈 Sản lượng tích lũy theo năm (Cumulative YTD)")
+            monthly_mwh_by_period = (
+                (actual_per_row[valid_mask] * interval_hours / 1000)
+                .groupby(month_periods[valid_mask])
+                .sum()
+                .sort_index()
+            )
+            available_years = sorted(monthly_mwh_by_period.index.year.unique().tolist())
+            # Nam "day du 12 thang" = dung 12 gia tri thang trong monthly_mwh_by_period cho nam do
+            # (khong hardcode Jan-Dec — chi dem so thang THAT co du lieu).
+            months_per_year = {y: int((monthly_mwh_by_period.index.year == y).sum()) for y in available_years}
+            full_years = [y for y in available_years if months_per_year[y] == 12]
+            # Uu tien nam day du 12 thang GAN NHAT; neu khong nam nao day du (dataset qua ngan),
+            # fallback ve nam gan nhat hien co de tranh IndexError, khong phai gia dinh "luon co".
+            default_year = max(full_years) if full_years else available_years[-1]
+
+            selected_year = st.selectbox(
+                "Chọn năm:", available_years, index=available_years.index(default_year),
+                key=f"overview_cumulative_year_{selected}",
+            )
+            if months_per_year[selected_year] < 12:
+                st.caption(
+                    f"ℹ️ Năm {selected_year} chỉ có {months_per_year[selected_year]}/12 tháng dữ liệu "
+                    f"(năm đầu/cuối dataset bị cắt) — trục X chỉ hiện đúng các tháng thật có, "
+                    f"không vẽ tháng rỗng."
+                )
+
+            year_series = monthly_mwh_by_period[monthly_mwh_by_period.index.year == selected_year].sort_index()
+            cumulative = year_series.cumsum()
+            x_labels = [f"{p.month:02d}/{p.year}" for p in cumulative.index]
+
+            cumulative_fig = go.Figure(data=[go.Scatter(
+                x=x_labels, y=cumulative.values, mode="lines+markers",
             )])
-            donut_fig.update_layout(title=f"Loss theo nhãn (MWh, chỉ nhãn loss dương) — {selected}")
-            st.plotly_chart(donut_fig, width="stretch", key=f"overview_donut_{selected}")
-
-        st.caption(f"Tổng loss (nhãn dương, không tính Normal): {sum(positive_loss.values()):,.1f} MWh.")
-        if negative_gain:
-            gain_text = ", ".join(f"{k}: {v:+,.1f} MWh" for k, v in negative_gain.items())
-            st.caption(
-                f"ℹ️ Các nhãn sau có tổng ÂM (nghĩa là sản lượng VƯỢT power curve/lý "
-                f"thuyết ở nhãn đó, không phải loss thật — không vẽ trong donut ở trên): {gain_text}."
+            cumulative_fig.update_layout(
+                title=f"Sản lượng tích lũy — {selected} — năm {selected_year}",
+                xaxis_title="Tháng (MM/YYYY)", yaxis_title="Sản lượng tích lũy (MWh)",
             )
-
-    # ---------- Phần 5: Monthly production (TÁI DÙNG công thức actual_energy trong ----------
-    # ---------- calculate_turbine_kpis: sum(actual)*interval_hours/1000, ÁP DỤNG THEO GROUP) ----------
-    st.markdown("### 📅 Monthly Production")
-    if "datetime" not in df.columns:
-        st.warning("Dataset không có cột 'datetime' đã derive — không thể vẽ biểu đồ theo tháng.")
-    else:
-        interval_hours = kpi_data["interval_minutes"] / 60
-        # TAI DUNG _compute_reachable_power_per_row() CHI de xac dinh valid_mask GIONG
-        # HET calculate_turbine_kpis() dung cho production_mwh (khong phai tinh reachable
-        # de dung, chi de dam bao tap dong duoc tinh la NHAT QUAN voi con so production_mwh
-        # da hien o Phan 3 — tong monthly phai cong don ra dung production_mwh).
-        reachable_per_row, _ = _compute_reachable_power_per_row(
-            df, theoretical_power_column, curve_result["data"], wind_speed_column,
-        )
-        actual_per_row = df[power_column].astype(float)
-        valid_mask = reachable_per_row.notna() & actual_per_row.notna()
-
-        # QUYET DINH (theo DoD): ca 5 dataset deu > 12 thang du lieu that (Site 1 ~26
-        # thang, Site 2 ~60 thang) — neu > 12 thang PHAN BIET (nunique) thi gop theo
-        # YYYY-MM (khong mat thong tin theo nam); nguoc lai (dataset gia dinh ngan hon)
-        # gop theo so thang 1-12 don gian. Tinh DONG (khong hardcode) de dung neu co
-        # dataset moi ngan hon sau nay.
-        month_periods = df["datetime"].dt.to_period("M")
-        distinct_months = month_periods.nunique()
-        if distinct_months > 12:
-            month_key = month_periods.astype(str)  # "YYYY-MM"
-            x_title = "Tháng (YYYY-MM)"
-        else:
-            month_key = df["datetime"].dt.month  # 1-12
-            x_title = "Tháng"
-
-        monthly_mwh = (
-            (actual_per_row[valid_mask] * interval_hours / 1000)
-            .groupby(month_key[valid_mask])
-            .sum()
-            .sort_index()
-        )
-        monthly_fig = px.bar(
-            x=monthly_mwh.index.astype(str), y=monthly_mwh.values,
-            labels={"x": x_title, "y": "Actual Production (MWh)"},
-            title=f"Sản lượng thực tế theo tháng — {selected}",
-        )
-        st.plotly_chart(monthly_fig, width="stretch", key=f"overview_monthly_{selected}")
-        st.caption(
-            f"{distinct_months} tháng có dữ liệu · tổng {monthly_mwh.sum():,.1f} MWh "
-            f"(khớp production_mwh ở Phần KPI: {kpi_data['production_mwh']:,.1f} MWh)."
-        )
-
-        # ---------- Phần 6: Sản lượng tích lũy theo năm (TÁI DÙNG actual_per_row/valid_mask/ ----------
-        # ---------- interval_hours vừa dùng ở Monthly Production — chỉ thêm lọc theo năm + cumsum) ----------
-        st.markdown("### 📈 Sản lượng tích lũy theo năm (Cumulative YTD)")
-        monthly_mwh_by_period = (
-            (actual_per_row[valid_mask] * interval_hours / 1000)
-            .groupby(month_periods[valid_mask])
-            .sum()
-            .sort_index()
-        )
-        available_years = sorted(monthly_mwh_by_period.index.year.unique().tolist())
-        # Nam "day du 12 thang" = dung 12 gia tri thang trong monthly_mwh_by_period cho nam do
-        # (khong hardcode Jan-Dec — chi dem so thang THAT co du lieu).
-        months_per_year = {y: int((monthly_mwh_by_period.index.year == y).sum()) for y in available_years}
-        full_years = [y for y in available_years if months_per_year[y] == 12]
-        # Uu tien nam day du 12 thang GAN NHAT; neu khong nam nao day du (dataset qua ngan),
-        # fallback ve nam gan nhat hien co de tranh IndexError, khong phai gia dinh "luon co".
-        default_year = max(full_years) if full_years else available_years[-1]
-
-        selected_year = st.selectbox(
-            "Chọn năm:", available_years, index=available_years.index(default_year),
-            key=f"overview_cumulative_year_{selected}",
-        )
-        if months_per_year[selected_year] < 12:
-            st.caption(
-                f"ℹ️ Năm {selected_year} chỉ có {months_per_year[selected_year]}/12 tháng dữ liệu "
-                f"(năm đầu/cuối dataset bị cắt) — trục X chỉ hiện đúng các tháng thật có, "
-                f"không vẽ tháng rỗng."
-            )
-
-        year_series = monthly_mwh_by_period[monthly_mwh_by_period.index.year == selected_year].sort_index()
-        cumulative = year_series.cumsum()
-        x_labels = [f"{p.month:02d}/{p.year}" for p in cumulative.index]
-
-        cumulative_fig = go.Figure(data=[go.Scatter(
-            x=x_labels, y=cumulative.values, mode="lines+markers",
-        )])
-        cumulative_fig.update_layout(
-            title=f"Sản lượng tích lũy — {selected} — năm {selected_year}",
-            xaxis_title="Tháng (MM/YYYY)", yaxis_title="Sản lượng tích lũy (MWh)",
-        )
-        st.plotly_chart(cumulative_fig, width="stretch", key=f"overview_cumulative_{selected}_{selected_year}")
+            st.plotly_chart(cumulative_fig, width="stretch", key=f"overview_cumulative_{selected}_{selected_year}")
         st.caption(
             f"{len(cumulative)} tháng có dữ liệu trong năm {selected_year} · tổng năm "
             f"{selected_year} (điểm cuối đường tích lũy): {year_series.sum():,.1f} MWh."
