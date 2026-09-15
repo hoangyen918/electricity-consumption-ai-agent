@@ -45,6 +45,32 @@ WIND_TURBINE_DATASET_PATHS = {
     "WindFarm04_WT3": "data/wind_turbine/data2/WindFarm04_WT3.csv",
     "WindFarm04_WT4": "data/wind_turbine/data2/WindFarm04_WT4.csv",
 }
+
+# 8 câu hỏi mẫu ĐÃ VERIFY PASS thật qua eval suite (eval_detail_20260909_165945.json,
+# overall_accuracy=89.66%) — dùng NGUYÊN VĂN, đã duyệt ở bước chọn case riêng, KHÔNG tự
+# paraphrase/thêm câu mới ở đây (xem app.py::render_sidebar cho phần nút bấm).
+SAMPLE_QUESTIONS_BY_CATEGORY = {
+    "⚡ Điện năng": [
+        "Dataset có bao nhiêu dòng?",
+        "Tháng nào Zone 1 tiêu thụ trung bình cao nhất?",
+    ],
+    "🌪️ Turbine gió": [
+        "Site 1 có bao nhiêu dòng dữ liệu bị thiếu ở cột StartedFlag?",
+        "Phân loại trạng thái vận hành Site 1 theo 8 nhãn, tỷ lệ Normal là bao nhiêu?",
+        "Vì sao Site 1 có công suất vượt lý thuyết nhiều vậy?",
+    ],
+    "📚 Kiến thức tổng hợp": [
+        "Tỷ lệ hộ dân nông thôn có điện của EVN là bao nhiêu phần trăm?",
+        "EVN được thành lập vào năm nào?",
+        "Theo quy định, một cơ sở sản xuất tiêu thụ 2 triệu kWh điện mỗi năm cần tiết kiệm tối thiểu bao nhiêu kWh?",
+    ],
+}
+# 3 câu turbine đều nhắc "Site 1" — system prompt (config/prompts.py) đã dặn agent PHẢI
+# tự truyền dataset_name khi câu hỏi nêu tên site cụ thể, nên tự nạp thêm his_data_GT1
+# vào CHUNG dataset_manager (Chat mode, vốn có sẵn Tetouan) là an toàn trong đa số
+# trường hợp — xem comment chi tiết tại nơi dùng (render_sidebar) về rủi ro nhỏ còn lại.
+_TURBINE_SAMPLE_QUESTIONS = set(SAMPLE_QUESTIONS_BY_CATEGORY["🌪️ Turbine gió"])
+
 # Nguồn: tercile WindSpd đo được trong investigation Phase 2 (không tính lại ở đây,
 # xem báo cáo "Phân tích deviation trên nhóm vi phạm" — corr(deviation, WindSpd)=-0.29).
 GT1_DEVIATION_TERCILE_WINDSPD = {"Thấp (~4.0 m/s)": 23.77, "Vừa (~6.2 m/s)": 17.74, "Cao (~8.6 m/s)": 15.12}
@@ -177,6 +203,37 @@ def render_sidebar():
         if uploaded_file is not None and st.session_state.get("_last_uploaded_file_id") != uploaded_file.file_id:
             st.session_state._last_uploaded_file_id = uploaded_file.file_id
             handle_upload(uploaded_file)
+
+        # CHỈ hiện ở Chat mode — render_sidebar() dùng CHUNG cho cả 2 mode (xem main()),
+        # nút bấm ở đây set pending_question để render_chat() đọc (KHÔNG chạy ở Dashboard
+        # mode), hiện cả bên Dashboard sẽ gây hiểu lầm bấm mà "không có gì xảy ra".
+        if st.session_state.get("view_mode") == "💬 Chat":
+            with st.expander("💡 Câu hỏi mẫu", expanded=False):
+                st.caption("Bấm để gửi ngay, không cần gõ:")
+                for cat_label, questions in SAMPLE_QUESTIONS_BY_CATEGORY.items():
+                    st.markdown(f"**{cat_label}**")
+                    for q_text in questions:
+                        if st.button(q_text, key=f"sample_{hash(q_text)}", width="stretch"):
+                            # LAZY: chỉ nạp his_data_GT1 lần đầu bấm 1 trong 3 câu turbine
+                            # (dataset_manager Chat mode mặc định KHÔNG có sẵn — khác hẳn
+                            # wind_turbine_manager riêng của Dashboard, xem _get_wind_
+                            # turbine_manager()). Dùng load_csv() thường qua đúng path đã
+                            # biết ở WIND_TURBINE_DATASET_PATHS — KHÔNG cần add_dataframe()
+                            # vì đây là file cố định trên đĩa, không phải dataset đã tồn
+                            # tại sẵn ở 1 manager khác cần bắc cầu.
+                            if q_text in _TURBINE_SAMPLE_QUESTIONS and "his_data_GT1" not in manager.list_datasets():
+                                with st.spinner("Đang nạp dữ liệu turbine Site 1 (his_data_GT1, lần đầu có thể mất vài giây)..."):
+                                    manager.load_csv(WIND_TURBINE_DATASET_PATHS["his_data_GT1"], name="his_data_GT1")
+                            st.session_state.pending_question = q_text
+                            st.rerun()
+                st.caption(
+                    "⚠️ 3 câu Turbine gió (Site 1) tự nạp thêm dataset `his_data_GT1` vào "
+                    "phiên chat khi bấm lần đầu (giữ nguyên các dataset khác đang có). Sau "
+                    "đó nếu hỏi lại câu về Tetouan mà KHÔNG nêu rõ tên dataset, agent có "
+                    "thể cần thử lại 1 lượt gọi tool để xác định đúng dataset (có nhiều "
+                    "hơn 1 dataset đang tải) — thường sẽ báo lỗi rõ ràng, không âm thầm "
+                    "trả số sai."
+                )
 
         st.divider()
 
@@ -1818,6 +1875,12 @@ def render_chat():
 
     with st.bottom:
         question = st.chat_input("Nhập câu hỏi của bạn...")
+    # Nut "Câu hỏi mẫu" (sidebar) set pending_question + st.rerun() thay vì tu go —
+    # doc lai o day va xoa NGAY (dung 1 lan) de di qua DUNG 1 luong xu ly voi go tay,
+    # khong tao nhanh rieng. chat_input tu render lai rong o lan rerun ke tiep (hanh
+    # vi mac dinh Streamlit), KHONG bi khoa cho cau tiep theo.
+    if not question and "pending_question" in st.session_state:
+        question = st.session_state.pop("pending_question")
     if question:
         st.session_state.chat_history.append({"role": "user", "content": question})
         with st.chat_message("user"):
