@@ -19,6 +19,25 @@ _client = OpenAI(
 MAX_RETRIES = 3
 RETRY_BACKOFF_SECONDS = 2
 
+# Thong bao THAN THIEN thay the khi loi cuoi cung la HTML (vd trang loi Cloudflare khi
+# tunnel down/DNS error) thay vi JSON binh thuong — phat hien THAT qua browser test
+# (2026-09-15): tunnel down tra ve nguyen 1 trang HTML loi Cloudflare (hang nghin ky
+# tu CSS/JS), bi nhet nguyen van vao str(last_error) roi hien thang len UI chat, KHONG
+# phai traceback Python nhung van la noi dung ky thuat xau, khong danh cho nguoi dung
+# cuoi doc.
+FRIENDLY_CONNECTION_ERROR_MESSAGE = (
+    "Không thể kết nối tới máy chủ AI (lỗi mạng/hạ tầng). Vui lòng thử lại sau."
+)
+
+
+def _looks_like_html(text: str) -> bool:
+    """Heuristic nhan dien response loi la HTML thay vi JSON/text loi binh thuong —
+    KHONG dua vao content-type header (khong luon con giu lai trong message exception
+    cua SDK, da xac nhan qua truong hop that: openai-python nhet nguyen response body
+    vao str(exception) khong kem header). Chi can 1 trong 3 dau hieu dac trung."""
+    stripped = text.strip().lower()
+    return stripped.startswith("<") or "<!doctype" in stripped or "<html" in stripped
+
 
 def chat_completion(
     messages: list,
@@ -75,7 +94,20 @@ def chat_completion(
     # Lỗi rõ ràng, không im lặng treo — RuntimeError này propagate lên tới
     # agent/loop.py -> Agent.ask() -> app.py's try/except (st.error(...)), không crash
     # toàn bộ Streamlit app. last_error giữ nguyên message gốc (timeout/5xx/... đọc
-    # được ngay) để dễ chẩn đoán chứ không che giấu nguyên nhân thật.
+    # được ngay) để dễ chẩn đoán chứ không che giấu nguyên nhân thật — TRỪ trường hợp
+    # response là HTML (vd trang lỗi Cloudflare khi tunnel down/DNS error): message đó
+    # dài hàng nghìn ký tự CSS/JS, không đọc được gì hữu ích, KHÔNG phù hợp hiện thẳng
+    # cho người dùng cuối — vẫn in đầy đủ nguyên văn ra console (docker logs bắt được)
+    # để debug, chỉ THAY THẾ message trong RuntimeError (cái thực sự lên UI qua
+    # app.py's except Exception as e: f"...{e}") bằng câu ngắn gọn, thân thiện.
+    last_error_text = str(last_error)
+    if _looks_like_html(last_error_text):
+        print(
+            f"  Chat completion failed after {MAX_RETRIES} attempts calling "
+            f"{SETTINGS.chat_base_url} — response trông giống HTML (lỗi hạ tầng/tunnel), "
+            f"chi tiết kỹ thuật đầy đủ:\n{last_error_text}"
+        )
+        raise RuntimeError(FRIENDLY_CONNECTION_ERROR_MESSAGE)
     raise RuntimeError(
         f"Chat completion failed after {MAX_RETRIES} attempts calling {SETTINGS.chat_base_url}: {last_error}"
     )
