@@ -198,7 +198,7 @@ def render_sidebar():
             )
 
         uploaded_file = st.file_uploader(
-            "Upload dataset khác (CSV/Excel)", type=["csv", "xlsx", "xls"]
+            "Upload dataset khác (CSV/Excel) — dùng chung cho Chat và Dashboard", type=["csv", "xlsx", "xls"]
         )
         if uploaded_file is not None and st.session_state.get("_last_uploaded_file_id") != uploaded_file.file_id:
             st.session_state._last_uploaded_file_id = uploaded_file.file_id
@@ -674,6 +674,10 @@ def _render_wind_farm_level_tab():
        cung 1 turbine hoac khac tuy du lieu thuc te.
     """
     st.subheader("🏭 Wind Farm Level — So sánh 4 turbine WT1-4 (chỉ Site 2)")
+    # Hint upload CHỈ đặt DUY NHẤT ở đây (tab đầu tiên/active mặc định khi mới mở
+    # Dashboard mode) — KHÔNG lặp lại ở 9 tab turbine còn lại (dư thừa, gây rối mắt).
+    # User thấy 1 lần khi mới mở Dashboard sẽ nhớ vị trí sidebar cho các tab sau.
+    st.caption("💡 Muốn dùng dataset khác? Upload qua sidebar (📊 Dataset).")
     st.caption(
         "Site 1 (GT1) chỉ có 1 turbine duy nhất nên không áp dụng được khái niệm so "
         "sánh cùng farm — tab này CHỈ hiển thị cho Site 2 (WindFarm04, 4 turbine WT1-4)."
