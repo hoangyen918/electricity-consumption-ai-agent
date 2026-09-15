@@ -1176,6 +1176,10 @@ def predict_power(
     cũng ước lượng từ điểm "gần curve". Dự đoán trên TOÀN BỘ tập test (không chỉ Normal)
     để so sánh công bằng với thực tế vận hành.
 
+    Phương pháp này khớp với hướng nghiên cứu đã công bố trong ngành wind power (outlier
+    removal + ML regression cho power curve modeling — vd RANSAC+IQR, Fuzzy clustering+
+    ELM), không phải cách tiếp cận tự phát.
+
     Gate 4c nghiêm ngặt: nếu wind_speed xếp hạng thấp bất thường (>2), DỪNG dùng XGBoost
     NGAY CẢ KHI Gate 4b pass — dấu hiệu nghi ngờ bug preprocessing (lệch thời gian giữa
     feature/target, feature bị scale sai...), không chỉ đơn thuần "model kém".
