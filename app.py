@@ -536,12 +536,49 @@ def _get_wind_turbine_manager() -> DatasetManager:
     return st.session_state.wind_turbine_manager
 
 
+def _available_turbine_datasets(manager: DatasetManager) -> list[str]:
+    """Toàn bộ dataset turbine CÓ THỂ chọn ở dropdown mọi tab Dashboard — 5 file cố định
+    (WIND_TURBINE_DATASET_PATHS, lazy-load qua đường dẫn khi chọn, xem
+    _ensure_wind_turbine_dataset_loaded) CỘNG bất kỳ dataset đã TỰ UPLOAD qua sidebar
+    (nằm trong st.session_state.dataset_manager — KHÁC INSTANCE với `manager` truyền
+    vào đây, xem _get_wind_turbine_manager() giải thích lý do tách riêng) có cấu trúc
+    turbine gió (detect qua _detect_site() != None), KHÔNG trùng tên 5 file cố định.
+
+    `manager` (wind_turbine_manager) hiện KHÔNG cần dùng trong hàm này (nguồn dataset
+    upload luôn là st.session_state.dataset_manager) — vẫn giữ tham số để mọi call site
+    (đã có sẵn `manager` trong scope trước dòng selectbox) gọi được gọn, và để hàm có
+    thể mở rộng sau này nếu wind_turbine_manager tự có thêm nguồn dataset khác."""
+    fixed = list(WIND_TURBINE_DATASET_PATHS.keys())
+    chat_manager = st.session_state.get("dataset_manager")
+    if chat_manager is None:
+        return fixed
+    uploaded_turbine = [
+        name for name in chat_manager.list_datasets()
+        if name not in fixed and _detect_site(chat_manager.get_dataframe(name)) is not None
+    ]
+    return fixed + uploaded_turbine
+
+
 def _ensure_wind_turbine_dataset_loaded(manager: DatasetManager, key: str) -> bool:
-    """Load lazy (chỉ load lần đầu, cache trong manager) 1 trong 5 dataset turbine gió.
-    Trả False + hiển thị lỗi rõ ràng nếu file không tồn tại (5 file này KHÔNG git-track,
-    có thể thiếu trên máy người dùng chưa copy file — xem WIND_TURBINE_DATASET_PATHS)."""
+    """Load lazy (chỉ load lần đầu, cache trong manager) 1 dataset turbine — 1 trong 5
+    file cố định (đọc từ path), HOẶC 1 dataset đã TỰ UPLOAD qua sidebar (đã nằm sẵn
+    trong st.session_state.dataset_manager, KHÁC instance với `manager` — đăng ký sang
+    `manager` qua add_dataframe(), KHÔNG đọc lại file). Trả False + hiển thị lỗi rõ
+    ràng nếu file cố định không tồn tại (5 file này KHÔNG git-track, có thể thiếu trên
+    máy người dùng chưa copy file — xem WIND_TURBINE_DATASET_PATHS) hoặc dataset upload
+    không còn tồn tại (vd đã bị xóa ở sidebar)."""
     if key in manager.list_datasets():
         return True
+
+    if key not in WIND_TURBINE_DATASET_PATHS:
+        chat_manager = st.session_state.get("dataset_manager")
+        uploaded_df = chat_manager.get_dataframe(key) if chat_manager is not None else None
+        if uploaded_df is None:
+            st.error(f"Không tìm thấy dataset đã upload '{key}' — có thể đã bị xóa ở sidebar.")
+            return False
+        manager.add_dataframe(uploaded_df, name=key)
+        return True
+
     path = Path(WIND_TURBINE_DATASET_PATHS[key])
     if not path.exists():
         st.error(
@@ -666,7 +703,7 @@ def _render_wind_farm_level_tab():
 def _render_overview_tab():
     st.subheader("📋 Tổng quan dataset turbine gió")
     manager = _get_wind_turbine_manager()
-    selected = st.selectbox("Chọn dataset:", list(WIND_TURBINE_DATASET_PATHS.keys()), key="overview_dataset_select")
+    selected = st.selectbox("Chọn dataset:", _available_turbine_datasets(manager), key="overview_dataset_select")
 
     if not _ensure_wind_turbine_dataset_loaded(manager, selected):
         return
@@ -778,7 +815,7 @@ def _render_diagnostic_tab():
 def _render_kpi_summary_tab():
     st.subheader("📊 KPI Summary — Production / Losses / Capacity Factor / TBA / PBA")
     manager = _get_wind_turbine_manager()
-    selected = st.selectbox("Chọn dataset:", list(WIND_TURBINE_DATASET_PATHS.keys()), key="kpi_dataset_select")
+    selected = st.selectbox("Chọn dataset:", _available_turbine_datasets(manager), key="kpi_dataset_select")
 
     if not _ensure_wind_turbine_dataset_loaded(manager, selected):
         return
@@ -925,7 +962,7 @@ def _build_power_curve_figure(selected, power_column, wind_speed_column, curve_r
 def _render_power_curve_tab():
     st.subheader("📈 Power Curve — Wind Speed vs Power, tô màu theo trạng thái")
     manager = _get_wind_turbine_manager()
-    selected = st.selectbox("Chọn dataset:", list(WIND_TURBINE_DATASET_PATHS.keys()), key="powercurve_dataset_select")
+    selected = st.selectbox("Chọn dataset:", _available_turbine_datasets(manager), key="powercurve_dataset_select")
 
     if not _ensure_wind_turbine_dataset_loaded(manager, selected):
         return
@@ -1032,7 +1069,7 @@ def _render_power_curve_classification_tab():
     """
     st.subheader("📈 Power Curve & Trạng Thái — theo cấu trúc báo cáo Meteodyn WPA")
     manager = _get_wind_turbine_manager()
-    selected = st.selectbox("Chọn turbine:", list(WIND_TURBINE_DATASET_PATHS.keys()), key="pc_status_dataset_select")
+    selected = st.selectbox("Chọn turbine:", _available_turbine_datasets(manager), key="pc_status_dataset_select")
 
     if not _ensure_wind_turbine_dataset_loaded(manager, selected):
         return
@@ -1148,7 +1185,7 @@ def _render_temporal_heatmap_tab():
     """
     st.subheader("🗓️ Biến động Power Curve theo Thời gian")
     manager = _get_wind_turbine_manager()
-    selected = st.selectbox("Chọn turbine:", list(WIND_TURBINE_DATASET_PATHS.keys()), key="heatmap_dataset_select")
+    selected = st.selectbox("Chọn turbine:", _available_turbine_datasets(manager), key="heatmap_dataset_select")
 
     if not _ensure_wind_turbine_dataset_loaded(manager, selected):
         return
@@ -1289,7 +1326,7 @@ def _render_runtime_analysis_tab():
     """
     st.subheader("⏱️ Runtime Analysis")
     manager = _get_wind_turbine_manager()
-    selected = st.selectbox("Chọn turbine:", list(WIND_TURBINE_DATASET_PATHS.keys()), key="runtime_dataset_select")
+    selected = st.selectbox("Chọn turbine:", _available_turbine_datasets(manager), key="runtime_dataset_select")
 
     if not _ensure_wind_turbine_dataset_loaded(manager, selected):
         return
@@ -1432,7 +1469,7 @@ def _render_runtime_analysis_tab():
 def _render_timeline_tab():
     st.subheader("🕐 Timeline các khoảng thời gian bất thường")
     manager = _get_wind_turbine_manager()
-    selected = st.selectbox("Chọn dataset:", list(WIND_TURBINE_DATASET_PATHS.keys()), key="timeline_dataset_select")
+    selected = st.selectbox("Chọn dataset:", _available_turbine_datasets(manager), key="timeline_dataset_select")
 
     if not _ensure_wind_turbine_dataset_loaded(manager, selected):
         return
@@ -1523,7 +1560,7 @@ def _render_turbine_overview_tab():
     HOAN TOAN cac tool/helper da co, KHONG viet lai logic nao."""
     st.subheader("🔍 Overview theo Turbine — Power Curve / KPI / Loss / Monthly Production")
     manager = _get_wind_turbine_manager()
-    selected = st.selectbox("Chọn turbine:", list(WIND_TURBINE_DATASET_PATHS.keys()), key="turbine_overview_select")
+    selected = st.selectbox("Chọn turbine:", _available_turbine_datasets(manager), key="turbine_overview_select")
 
     if not _ensure_wind_turbine_dataset_loaded(manager, selected):
         return

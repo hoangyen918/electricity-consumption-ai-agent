@@ -126,7 +126,7 @@ class DatasetManager:
 
     def __init__(self):
         self._datasets: dict[str, pd.DataFrame] = {}
-        self._source_paths: dict[str, str] = {}
+        self._source_paths: dict[str, str | None] = {}
         self._datetime_source_columns: dict[str, str | None] = {}
         self._active_name: str | None = None
 
@@ -158,6 +158,29 @@ class DatasetManager:
         self._source_paths[key] = path
         self._datetime_source_columns[key] = source_column
         self._active_name = key
+
+    def add_dataframe(self, df: pd.DataFrame, name: str) -> None:
+        """Đăng ký 1 DataFrame ĐÃ CÓ SẴN trong bộ nhớ (vd đã load ở 1 DatasetManager
+        khác) vào manager này, KHÔNG đọc lại từ file — dùng khi 1 dataset (vd người
+        dùng tự upload qua sidebar) cần dùng chung được ở nhiều DatasetManager instance
+        khác nhau trong cùng 1 session (xem app.py: st.session_state.dataset_manager
+        cho Chat vs st.session_state.wind_turbine_manager cho Dashboard — 2 instance
+        TÁCH RIÊNG có chủ đích, KHÔNG chia sẻ dataset tự động).
+
+        Vẫn gọi derive_time_columns() — AN TOÀN/idempotent (chỉ thêm cột còn thiếu,
+        không ghi đè cột đã có, xem docstring derive_time_columns) — để đảm bảo dataset
+        được đăng ký ĐÚNG CHUẨN như load_csv()/load_excel(), kể cả khi df truyền vào
+        chưa từng qua derive_time_columns() ở manager nguồn.
+
+        source_path lưu None (dataset không xuất phát từ 1 file vật lý cụ thể TRONG
+        manager này — get_datetime_source_column() vẫn hoạt động bình thường, chỉ
+        get_source_path()-kiểu-method nào đó trong tương lai mới bị ảnh hưởng, hiện
+        chưa có method như vậy)."""
+        df, source_column = derive_time_columns(df)
+        self._datasets[name] = df
+        self._source_paths[name] = None
+        self._datetime_source_columns[name] = source_column
+        self._active_name = name
 
     def load_file(self, path: str, sheet_name=0, name: str | None = None) -> None:
         """
