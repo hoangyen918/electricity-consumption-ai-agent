@@ -56,3 +56,4 @@
 {"id": "turbine_003", "category": "turbine_qa", "question": "Vì sao Site 1 có công suất vượt lý thuyết nhiều vậy?", "answer_must_contain_any": ["9.11", "9.1", "21302", "21.302", "21,302"], "expected_tool": "diagnose_theoretical_power_deviation"}
 {"id": "turbine_004", "category": "turbine_qa", "question": "Dự đoán công suất Site 1 dựa trên gió, độ chính xác model ra sao?", "answer_must_contain_any": ["0.96", "269", "R2", "R²"], "expected_tool": "predict_power"}
 {"id": "turbine_005", "category": "turbine_qa", "question": "Curtailment tháng 3 năm 2024 ở Site 1 có bao nhiêu khoảng thời gian?", "answer_must_contain_any": ["14"], "expected_tool": "group_anomaly_windows"}
+{"id": "turbine_006", "category": "turbine_qa", "question": "Tinh KPI tong the cho Site 1", "answer_must_contain_any": ["33270.95", "33,270.95", "33 270.95", "33271", "33,271", "37.94", "37,94"], "expected_tool": "calculate_turbine_kpis"}
