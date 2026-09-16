@@ -15,7 +15,7 @@ GET_DATASET_SUMMARY_SCHEMA = {
     "type": "function",
     "function": {
         "name": "get_dataset_summary",
-        "description": "Lấy thông tin tổng quan về dataset đang tải: số dòng, danh sách cột, khoảng thời gian, các cột số. Dùng khi cần biết dataset có gì trước khi phân tích sâu hơn. Nếu không chỉ định dataset_name, kết quả còn kèm danh sách TẤT CẢ dataset đã upload để chọn cho các lần gọi tool tiếp theo.",
+        "description": "Lấy thông tin tổng quan về dataset đang tải: số dòng, danh sách cột, khoảng thời gian, các cột số, 3 dòng mẫu, min/max mỗi cột số, % thiếu mỗi cột, và cột nào do hệ thống tự derive (year/month/day/hour/weekday/date/datetime). Dùng khi cần biết dataset có gì trước khi phân tích sâu hơn — đặc biệt hữu ích với file chưa từng gặp (tên cột lạ, không biết đơn vị/ý nghĩa). Nếu không chỉ định dataset_name, kết quả còn kèm danh sách TẤT CẢ dataset đã upload để chọn cho các lần gọi tool tiếp theo.",
         "parameters": {
             "type": "object",
             "properties": {

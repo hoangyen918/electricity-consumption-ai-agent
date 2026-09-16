@@ -1,6 +1,8 @@
+import json
+
 import pandas as pd
 
-from tools.dataset_manager import DatasetManager
+from tools.dataset_manager import DatasetManager, DATETIME_DERIVED_COLUMNS
 from tools.tool_results import failure, success
 
 AGGREGATION_WHITELIST = ["mean", "sum", "min", "max", "median", "std", "count"]
@@ -54,6 +56,42 @@ def get_dataset_summary(manager: DatasetManager, dataset_name: str | None = None
 
         dtypes = {col: str(dtype) for col, dtype in df.dtypes.items()}
 
+        # sample_rows: dung .to_json() cua CHINH pandas roi json.loads() lai — KHONG tu
+        # tay .to_dict(orient="records") vi gia tri tho van chua numpy int64/Timestamp/
+        # datetime.date (tu cot "date" derive) KHONG serialize duoc bang json.dumps()
+        # thuong (se crash o agent/loop.py:198 khi gui cho LLM) — to_json() cua pandas
+        # da tu xu ly dung tat ca cac kieu nay, khong can tu viet lai logic convert.
+        sample_rows = json.loads(df.head(3).to_json(orient="records", date_format="iso"))
+
+        # numeric_ranges: tai dung _to_json_number() (dang dung cho aggregate_metric/
+        # group_metric o duoi) de convert nhat quan, khong viet ham convert rieng.
+        numeric_ranges = {
+            col: {"min": _to_json_number(df[col].min()), "max": _to_json_number(df[col].max())}
+            for col in numeric_columns
+        }
+
+        # missing_pct: CHI liet ke cot CO missing (bo qua cot 0%) — tranh output dai
+        # dong voi dataset nhieu cot deu sach.
+        missing_pct = {
+            col: round(float(df[col].isna().mean()) * 100, 2)
+            for col in df.columns if df[col].isna().any()
+        }
+
+        # derived_columns: TAI DUNG get_datetime_source_column() (DatasetManager da tu
+        # luu san tu derive_time_columns(), KHONG doan/hardcode lai) de biet cot GOC nao
+        # duoc chon lam nguon datetime — neu khac "datetime" nghia la cot "datetime" la
+        # MOI duoc them (khong phai da co san trong file goc). DATETIME_DERIVED_COLUMNS
+        # (hang so co san trong tools/dataset_manager.py, chua tung duoc dung o dau khac)
+        # liet ke dung 6 cot derive_time_columns() luon co the them — chi bao gom neu
+        # THAT SU tim duoc nguon datetime (source_column khong None), khop dung dieu
+        # kien derive_time_columns() dung de quyet dinh co them cac cot nay khong.
+        datetime_source_column = manager.get_datetime_source_column(dataset_name)
+        derived_columns = []
+        if datetime_source_column is not None:
+            if datetime_source_column != "datetime":
+                derived_columns.append("datetime")
+            derived_columns.extend(c for c in DATETIME_DERIVED_COLUMNS if c in df.columns)
+
         result_data = {
             "dataset_name": resolved_name,
             "row_count": len(df),
@@ -61,6 +99,10 @@ def get_dataset_summary(manager: DatasetManager, dataset_name: str | None = None
             "numeric_columns": numeric_columns,
             "date_range": date_range,
             "dtypes": dtypes,
+            "sample_rows": sample_rows,
+            "numeric_ranges": numeric_ranges,
+            "missing_pct": missing_pct,
+            "derived_columns": derived_columns,
         }
 
         if dataset_name is None:
