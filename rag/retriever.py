@@ -28,8 +28,8 @@ def retrieve(query: str, top_k: int | None = None, where: dict | None = None) ->
         return []
 
     results = []
-    for doc, meta, dist in zip(
-        raw["documents"][0], raw["metadatas"][0], raw["distances"][0]
+    for cid, doc, meta, dist in zip(
+        raw["ids"][0], raw["documents"][0], raw["metadatas"][0], raw["distances"][0]
     ):
         results.append(format_search_result(
             text=doc,
@@ -37,6 +37,7 @@ def retrieve(query: str, top_k: int | None = None, where: dict | None = None) ->
             page=meta["page"],
             distance=dist,
             document_type=meta.get("document_type", "annual_report"),
+            chunk_id=cid,
         ))
     return results
 

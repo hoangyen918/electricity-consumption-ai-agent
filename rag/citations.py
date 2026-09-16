@@ -9,9 +9,13 @@ def format_citation(source: str, page: int, document_type: str = "annual_report"
     return f"[{source}, p.{page}]"
 
 
-def format_search_result(text: str, source: str, page: int, distance: float, document_type: str = "annual_report") -> dict:
+def format_search_result(
+    text: str, source: str, page: int, distance: float,
+    document_type: str = "annual_report", chunk_id: str = "",
+) -> dict:
     """Chuẩn hóa 1 kết quả retrieval thành dict nhất quán."""
     return {
+        "chunk_id": chunk_id,
         "text": text,
         "source": source,
         "page": page,

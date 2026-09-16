@@ -54,3 +54,103 @@ def test_log_interaction_appends_not_overwrites(tmp_path):
 
     lines = log_path.read_text(encoding="utf-8").strip().split("\n")
     assert len(lines) == 2
+
+
+def test_log_interaction_includes_retrieval_details_for_search_kb(tmp_path):
+    """retrieval_details phải xuất hiện CHỈ cho search_knowledge_base thành công, chứa
+    đúng chunk_id/source/page/distance, KHÔNG chứa "text" (tránh phình log)."""
+    log_path = tmp_path / "test_trace.jsonl"
+    fake_result = {
+        "answer": "Câu trả lời có trích dẫn.",
+        "trace": [
+            {
+                "tool_name": "search_knowledge_base",
+                "arguments": {"query": "tỷ lệ tổn thất điện năng"},
+                "result": {
+                    "ok": True,
+                    "data": {
+                        "results": [
+                            {
+                                "chunk_id": "evn_2022_2023_p010_c00",
+                                "text": "Đoạn văn bản rất dài của chunk, không nên lưu vào log..." * 20,
+                                "source": "EVN Annual Report 2022-2023",
+                                "page": 10,
+                                "citation": "[EVN Annual Report 2022-2023, p.10]",
+                                "distance": 0.8123,
+                            }
+                        ],
+                        "result_count": 1,
+                    },
+                },
+            }
+        ],
+        "iterations": 1,
+        "hit_max_iterations": False,
+        "usage_per_call": [],
+    }
+
+    log_interaction("req_kb1", "Q?", "model", fake_result, 100, 0.0, log_path=log_path)
+
+    entry = json.loads(log_path.read_text(encoding="utf-8").strip())
+    tool_entry = entry["tools_called"][0]
+    assert "retrieval_details" in tool_entry
+    assert tool_entry["retrieval_details"] == [
+        {
+            "chunk_id": "evn_2022_2023_p010_c00",
+            "source": "EVN Annual Report 2022-2023",
+            "page": 10,
+            "distance": 0.8123,
+        }
+    ]
+    # KHONG duoc lo full text chunk vao log
+    assert "text" not in tool_entry["retrieval_details"][0]
+    # Cac field cu (tool_name/arguments/ok) van nguyen, khong doi format
+    assert tool_entry["tool_name"] == "search_knowledge_base"
+    assert tool_entry["arguments"] == {"query": "tỷ lệ tổn thất điện năng"}
+    assert tool_entry["ok"] is True
+
+
+def test_log_interaction_no_retrieval_details_for_non_search_tool(tmp_path):
+    """Tool khác search_knowledge_base KHONG duoc them retrieval_details — giu nguyen
+    format 3-field cu (tool_name/arguments/ok)."""
+    log_path = tmp_path / "test_trace.jsonl"
+    fake_result = {
+        "answer": "42",
+        "trace": [
+            {"tool_name": "aggregate_metric", "arguments": {"column": "x"}, "result": {"ok": True}}
+        ],
+        "iterations": 1,
+        "hit_max_iterations": False,
+        "usage_per_call": [],
+    }
+    log_interaction("req_agg1", "Q?", "model", fake_result, 100, 0.0, log_path=log_path)
+
+    entry = json.loads(log_path.read_text(encoding="utf-8").strip())
+    tool_entry = entry["tools_called"][0]
+    assert tool_entry == {"tool_name": "aggregate_metric", "arguments": {"column": "x"}, "ok": True}
+    assert "retrieval_details" not in tool_entry
+
+
+def test_log_interaction_no_retrieval_details_when_search_kb_failed(tmp_path):
+    """search_knowledge_base that bai (ok=False) KHONG duoc them retrieval_details (khong
+    co result["data"] de doc)."""
+    log_path = tmp_path / "test_trace.jsonl"
+    fake_result = {
+        "answer": "Xin lỗi, không tìm thấy.",
+        "trace": [
+            {
+                "tool_name": "search_knowledge_base",
+                "arguments": {"query": "abc"},
+                "result": {"ok": False, "error": "No relevant information found."},
+            }
+        ],
+        "iterations": 1,
+        "hit_max_iterations": False,
+        "usage_per_call": [],
+    }
+    log_interaction("req_kbfail1", "Q?", "model", fake_result, 100, 0.0, log_path=log_path)
+
+    entry = json.loads(log_path.read_text(encoding="utf-8").strip())
+    tool_entry = entry["tools_called"][0]
+    assert "retrieval_details" not in tool_entry
+    assert tool_entry["ok"] is False

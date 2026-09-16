@@ -11,6 +11,33 @@ def new_request_id() -> str:
     return f"req_{uuid.uuid4().hex[:12]}"
 
 
+def _tool_call_entry(t: dict) -> dict:
+    """
+    Format 1 tool call cho tools_called. CHỈ search_knowledge_base thành công có
+    thêm "retrieval_details" — list {chunk_id, source, page, distance} lấy từ
+    t["result"]["data"]["results"] đã có sẵn trong trace (KHÔNG gọi lại retrieve()).
+    Cố tình KHÔNG lưu "text"/nội dung chunk đầy đủ — tránh phình agent_trace.jsonl
+    quá nhanh (mỗi chunk text có thể vài trăm token, x10 chunk x mỗi lượt hỏi).
+    """
+    entry = {
+        "tool_name": t["tool_name"],
+        "arguments": t["arguments"],
+        "ok": t["result"]["ok"],
+    }
+    if t["tool_name"] == "search_knowledge_base" and t["result"]["ok"]:
+        results = t["result"].get("data", {}).get("results", [])
+        entry["retrieval_details"] = [
+            {
+                "chunk_id": r.get("chunk_id", ""),
+                "source": r["source"],
+                "page": r["page"],
+                "distance": r["distance"],
+            }
+            for r in results
+        ]
+    return entry
+
+
 def log_interaction(
     request_id: str,
     question: str,
@@ -34,14 +61,7 @@ def log_interaction(
         "model": model,
         "iterations": result["iterations"],
         "hit_max_iterations": result["hit_max_iterations"],
-        "tools_called": [
-            {
-                "tool_name": t["tool_name"],
-                "arguments": t["arguments"],
-                "ok": t["result"]["ok"],
-            }
-            for t in result["trace"]
-        ],
+        "tools_called": [_tool_call_entry(t) for t in result["trace"]],
         "usage_per_call": result["usage_per_call"],
         "empty_content_retries": result.get("empty_content_retries", 0),
         "total_latency_ms": round(total_latency_ms, 1),
