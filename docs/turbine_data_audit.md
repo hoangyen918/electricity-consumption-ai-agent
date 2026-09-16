@@ -306,6 +306,39 @@ Validate bằng đối chiếu OpSt (GT1, không dùng làm input, chỉ kiểm 
   thật — **cần domain expert review định nghĩa ngưỡng trước khi dùng nhãn này cho
   quyết định vận hành thật**.
 
+### Thử nghiệm pitch/shaft-speed cho classify_turbine_status (2026-09, chưa tích hợp)
+
+**Nguồn:** Schössow et al., "Detailed Classification of SCADA Data for Wind Turbine
+Performance Monitoring", *Data* 2024, 9, 46 (Leibniz Universität Hannover) — CHƯA
+ingest vào KB (`kb/raw/`), chỉ đọc thủ công khi làm thử nghiệm này. Script thử nghiệm
+là scratchpad (không lưu trong repo, không sửa `classify_turbine_status()`).
+
+- **Curtailment + pitch≥8° (AND với rule hiện tại):** GT1, validate qua OpSt thật
+  (ground truth = OpSt=="Power Production"). Baseline 3.101 điểm, 95,26% khớp. Thêm
+  điều kiện: 796 điểm còn lại (mất 74,3%), 96,36% khớp (+1,1 điểm %). Đánh đổi kém —
+  mất phần lớn true positive để đổi lấy cải thiện không đáng kể. Có thể thử làm tín
+  hiệu phụ/tham khảo (không bắt buộc AND) nếu quay lại sau.
+- **Measurement Error + pitch≥10° (AND):** Baseline 10.922 điểm, 60,84% khớp cùng
+  ground truth trên. Thêm điều kiện: 3.894 điểm còn lại, 0,00% khớp. KHÔNG phải bằng
+  chứng pitch vô dụng — 81,33% điểm pitch cao rơi vào OpSt=Standstill (không rải
+  rác), nghĩa là ground truth tự chọn (OpSt=Power Production) SAI KHUNG cho nhãn
+  này: pitch cao (cánh feathered) tương ứng với turbine thật sự đang dừng/standby,
+  không phải "lỗi cảm biến khi đang vận hành thật". Cần định nghĩa lại ground truth
+  trước khi thử lại có ý nghĩa.
+- **Partial Stop + shaft speed (Site 2/WT1, ĐỊNH TÍNH):** không có OpSt trên Site 2
+  nên không tính được % agreement. Overlap thấp với rule cũ ở mọi tổ hợp cột/
+  percentile đã thử (LOW_SPEED_SHAFT/HIGH_SPEED_SHAFT × p5/p10): 11-23% — rule mới
+  bắt tập điểm gần như khác hẳn, không phải tinh chỉnh rule cũ. Đọc tay 8 mẫu
+  (LOW_SPEED_SHAFT, p10): 6/8 (75%) vẫn là hiện tượng low-wind dip đã biết (gió sát
+  cut-in ~2-4 m/s, power gần 0 "bình thường", giống vấn đề đã ghi ở mục Partial Stop
+  trên); chỉ 2/8 cho thấy dấu hiệu transition/fault thật rõ hơn. Mẫu quá nhỏ để kết
+  luận, không có bằng chứng đủ mạnh để ưu tiên.
+
+**Kết luận:** KHÔNG tích hợp cả 2 hướng vào `classify_turbine_status()` ở thời điểm
+này. Nếu quay lại, ưu tiên pitch (Curtailment/Measurement Error) trước vì là hướng
+DUY NHẤT kiểm định được bằng số thật (có OpSt làm ground truth trên GT1) — bước tiếp
+theo cần làm là định nghĩa lại ground truth cho Measurement Error trước khi thử lại.
+
 ## Hướng cải thiện V2 (tham khảo NREL WIND Toolkit validation methodology — tài liệu này validate DỮ LIỆU MÔ PHỎNG, không phải SCADA thật, nên chỉ 1 phần áp dụng được), chưa làm
 
 - Hysteresis cho cut-out/restart (state machine thay vì rule tức thời) — rule cut-out
