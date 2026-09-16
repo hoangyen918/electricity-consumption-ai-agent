@@ -24,8 +24,9 @@ from agent.turbine_tool_wrappers import (
 )
 from agent.agent import Agent
 from config.settings import SETTINGS
-from rag.vector_store import count_documents
-from rag.retriever import SCORE_THRESHOLD
+from rag.vector_store import count_documents, get_collection
+from rag.retriever import SCORE_THRESHOLD, retrieve
+from rag.kb_manager import load_sources
 from evals.run_evals import REFUSAL_PATTERNS, THRESHOLDS
 from evals.llm_judge import diagnose_rag_quality
 
@@ -2128,14 +2129,81 @@ def _render_cross_analysis_tab():
         )
 
 
+def _render_kb_explorer_tab():
+    """Tab MOI (thu 13, vi tri cuoi) — duyet collection ChromaDB CHI DOC, khong co nut
+    xoa/sua nao (an toan). TAI DUNG HOAN TOAN get_collection()/count_documents()
+    (rag/vector_store.py) va load_sources() (rag/kb_manager.py) da co — KHONG tao
+    PersistentClient rieng, KHONG viet lai logic query."""
+    st.subheader("🗄️ KB Explorer")
+    collection = get_collection()
+
+    total = count_documents()
+    st.metric("Tổng số chunk", total)
+
+    sources = load_sources()
+    # QUAN TRONG: metadata "source" luu trong Chroma = source_metadata["title"] (xem
+    # rag/extractors.py:17 — "source": source_metadata["title"]), KHONG PHAI field
+    # "source" (khong ton tai trong load_sources()) hay "id" (slug, vd
+    # "evn_annual_2024_2025") — phai loc theo dung "title" thi where={"source": ...}
+    # moi khop metadata that trong Chroma, neu khong filter se luon tra ve rong.
+    source_titles = sorted(s["title"] for s in sources) if sources else []
+
+    selected_source = st.selectbox(
+        "Lọc theo nguồn (để trống = xem tất cả):",
+        ["(Tất cả)"] + source_titles,
+        key="kbexplorer_source_select",
+    )
+
+    limit = st.slider("Số chunk hiển thị:", 5, 100, 20, key="kbexplorer_limit_slider")
+
+    where_filter = None if selected_source == "(Tất cả)" else {"source": selected_source}
+    result = collection.get(where=where_filter, limit=limit, include=["documents", "metadatas"])
+
+    n_results = len(result["documents"])
+    scope_note = f"nguồn: {selected_source}" if where_filter else "tất cả nguồn"
+    st.caption(f"Hiển thị {n_results} chunk ({scope_note}).")
+
+    if n_results == 0:
+        st.info("Không có chunk nào khớp bộ lọc này.")
+    for i, (doc, meta) in enumerate(zip(result["documents"], result["metadatas"])):
+        with st.expander(f"[{result['ids'][i]}] {meta.get('source', '?')} — trang {meta.get('page', '?')}"):
+            st.text(doc[:500] + ("..." if len(doc) > 500 else ""))
+            st.json(meta)
+
+    st.divider()
+    st.caption("Thử tìm kiếm (giống agent thật dùng)")
+    st.caption("⚠️ Tìm kiếm này gọi API embedding thật, tốn phí nhỏ mỗi lần bấm.")
+    query = st.text_input("Câu hỏi thử:", key="kbexplorer_search_query")
+    # Nut PHAI luon render (khong dat trong "if query and st.button(...)" — short-circuit
+    # se khien st.button() khong bao gio duoc goi/hien ra khi query con rong, tuc nguoi
+    # dung KHONG THAY nut cho tan khi da go chu — phat hien that qua AppTest).
+    search_clicked = st.button("Tìm kiếm", key="kbexplorer_search_button")
+    if search_clicked and not query:
+        st.warning("Nhập câu hỏi trước khi tìm kiếm.")
+    elif search_clicked and query:
+        with st.spinner("Đang tìm..."):
+            try:
+                results = retrieve(query, top_k=5)
+            except Exception as exc:
+                st.error(f"Lỗi khi gọi API embedding — có thể tunnel/OpenRouter hết credit: {exc}")
+                results = None
+        if results is not None:
+            if not results:
+                st.info("Không tìm thấy kết quả nào (query rỗng hoặc collection trống).")
+            for r in results:
+                st.write(f"**[{r['distance']:.3f}]** {r['source']} - trang {r['page']}")
+                st.caption(r["text"][:200])
+
+
 def render_wind_turbine_dashboard():
-    # Tab MOI (thu 12) them vao CUOI danh sach — KHONG chen giua/doi lai 11 tab hien co
-    # (khong doi ten bien tab0..tab10, khong doi thu tu) de dam bao dung rang buoc
-    # "khong dung 11 tab hien co" tuyet doi, ke ca phan wiring nay.
-    tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11 = st.tabs([
+    # Tab MOI (thu 13) them vao CUOI danh sach — KHONG chen giua/doi lai 12 tab hien co
+    # (khong doi ten bien tab0..tab11, khong doi thu tu) de dam bao dung rang buoc
+    # "khong dung 12 tab hien co" tuyet doi, ke ca phan wiring nay.
+    tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12 = st.tabs([
         "🏭 Wind Farm Level", "📈 Power Curve & Trạng Thái", "🗓️ Biến động Power Curve theo Thời gian",
         "⏱️ Runtime Analysis", "📋 Tổng quan", "📈 Power Curve", "🕐 Timeline", "🔍 Diagnostic",
         "📊 KPI Summary", "🔍 Overview theo Turbine", "📉 Time Series & Time Profile", "🔀 Cross-Analysis",
+        "🗄️ KB Explorer",
     ])
     with tab0:
         _render_wind_farm_level_tab()
@@ -2161,6 +2229,8 @@ def render_wind_turbine_dashboard():
         _render_timeseries_profile_tab()
     with tab11:
         _render_cross_analysis_tab()
+    with tab12:
+        _render_kb_explorer_tab()
 
 
 def render_chat():
