@@ -280,6 +280,37 @@ semantic/topic-aware chunking instead of raw page+token splitting) is
 planned V2 work, consistent with the chunk-size experimentation (500/700/900
 tokens) already anticipated in the original project plan.
 
+### KB chunk quality audit (measured 2026-09, 6,214 chunks)
+
+Direct measurement against the live ChromaDB collection (read-only analysis, not a
+code change): of the 1,861 chunks that are NOT the last chunk of their source page
+(the only group whose ending position reflects an actual chunker cut, as opposed to
+simply reaching the natural end of a page), **94.20% (1,753/1,861) do not end on
+`.`/`!`/`?`**.
+
+Sampling the actual chunk tails shows this number is dominated by one cause, not the
+one it first suggests. Most flagged chunks are cut in the middle of dense statistical
+tables — World Energy Outlook data tables (e.g. `...23,664\n26,757\n8,653\n21,447\n
+644\n1,222\n2024\nPOWER SYSTEM AND PRODUCTION\n11`, EVN Annual Report 2024-2025 p.7)
+or EVN financial statements/org charts — not prose sentences being chopped mid-clause.
+A minority are genuine prose mid-sentence cuts, e.g.:
+- "...focusing on developing a highly skilled pool of" (EVN Annual Report 2024-2025, p.15)
+- "...heat waves, floods, droughts and storms, and" (World Energy Outlook 2021, p.110)
+
+No single source stands out as meaningfully worse than the rest — the 18 sources with
+non-last-page chunks range 91.24%-100.00%, a narrow band. Chunk size vs. the
+configured 700-token target (`rag/chunker.py::CHUNK_SIZE_TOKENS`): median 572 tokens,
+only 0.02% of chunks exceed the target, 22.59% are under half the target (mostly short
+trailing chunks at the end of a page, expected).
+
+Not actioned: these are two different problems needing two different fixes
+(table-cut content needs table-structure-aware chunking; prose-cut content needs
+sentence-boundary chunking), and they are not the same issue as the page-packing
+problem described above. Not prioritized — no evidence yet that this measurably hurts
+real answer quality (Recall@10/MRR still pass their thresholds, see "Known
+Limitations — Retrieval Quality" above). Documented here as a baseline for a future
+V2 decision, not acted on now.
+
 ### Sample size caveat on the Gate 4 fix
 
 The systemic prompt fix (calculate tool enforcement) was validated against 11
