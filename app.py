@@ -1987,14 +1987,155 @@ def _render_timeseries_profile_tab():
     )
 
 
+def _render_cross_analysis_tab():
+    """Tab MOI (thu 12, vi tri cuoi) — 2 bieu do cross-variable uu tien theo vi du tai
+    lieu Meteodyn: (A) Yaw error vs Performance ratio (CA 2 site), (B) Temperature vs
+    Power (CHI Site 2 — Site 1/GT1 khong co cot nhiet do nao). TAI DUNG HOAN TOAN
+    get_yaw_error()/_compute_reachable_power_per_row()/get_or_compute_power_curve() da
+    co, khong tinh lai logic nao. Day la pham vi KHOI DAU hop ly (1 cap bien cho moi
+    phan), khong phai day du moi cap bien co the co — mo rong sau neu can (Shaft speed
+    vs Power, Pitch vs Wind speed...), KHONG lam trong lan nay."""
+    st.subheader("🔀 Cross-Analysis")
+    manager = _get_wind_turbine_manager()
+    selected = st.selectbox("Chọn dataset:", _available_turbine_datasets(manager), key="crossanalysis_dataset_select")
+
+    if not _ensure_wind_turbine_dataset_loaded(manager, selected):
+        return
+
+    df = manager.get_dataframe(selected)
+    site = _detect_site(df)
+    if site is None:
+        st.error("Không nhận diện được cấu trúc turbine gió cho dataset này.")
+        return
+
+    power_column, wind_speed_column = _power_wind_columns(site)
+    theoretical_power_column = (
+        "GT1.Common.TheoActiveW" if site == "site1" and "GT1.Common.TheoActiveW" in df.columns else None
+    )
+
+    # ---------- Phần A: Yaw Error vs Performance Ratio (cả 2 site) ----------
+    st.markdown("### 🧭 Yaw Error vs Performance Ratio")
+
+    # get_yaw_error() tu raise ValueError neu thieu cot can thiet — bat loi de bao ro
+    # ly do thay vi crash ca tab (KHONG lap lai danh sach cot no can).
+    try:
+        yaw_error = get_yaw_error(df, site)
+    except ValueError as exc:
+        yaw_error = None
+        st.info(f"Không thể vẽ Phần A — {exc}")
+
+    if yaw_error is not None:
+        with st.spinner("Đang tính power curve + reachable power (lần đầu có thể mất vài giây)..."):
+            curve_result = get_or_compute_power_curve(manager, selected, power_column, wind_speed_column, 1.0)
+        if not curve_result["ok"]:
+            st.error(curve_result["error"])
+        else:
+            # reachable_power: Site 1 TRUC TIEP GT1.Common.TheoActiveW, Site 2 noi suy tu
+            # power curve — dung Y HET logic calculate_turbine_kpis()/heatmap tab dang dung.
+            reachable_per_row, _method_used = _compute_reachable_power_per_row(
+                df, theoretical_power_column, curve_result["data"], wind_speed_column,
+            )
+            actual = df[power_column].astype(float)
+            work_df = pd.DataFrame({
+                "abs_yaw_error": yaw_error.abs(),
+                "actual": actual,
+                "reachable": reachable_per_row.astype(float),
+            }).dropna()
+            # Performance ratio CHI co nghia khi reachable > 0 — loai cac dong reachable
+            # <=0 (vd rat it gio, hoac danh gia am/khong hop le) thay vi chia cho gia tri
+            # sat 0 gay ratio bung no khong y nghia.
+            work_df = work_df[work_df["reachable"] > 0]
+            work_df["performance_ratio_pct"] = work_df["actual"] / work_df["reachable"] * 100
+
+            yaw_bins = [0, 5, 10, np.inf]
+            yaw_labels = ["0-5°", "5-10°", ">10°"]
+            work_df["yaw_bin"] = pd.cut(
+                work_df["abs_yaw_error"], bins=yaw_bins, labels=yaw_labels, include_lowest=True,
+            )
+
+            bin_stats = work_df.groupby("yaw_bin", observed=True).agg(
+                median_ratio_pct=("performance_ratio_pct", "median"),
+                n_points=("performance_ratio_pct", "count"),
+            ).reindex(yaw_labels)
+
+            if bin_stats["n_points"].fillna(0).sum() == 0:
+                st.info("Không đủ dữ liệu hợp lệ (reachable power > 0) để vẽ Phần A cho dataset này.")
+            else:
+                yaw_fig = go.Figure(data=[go.Bar(
+                    x=yaw_labels, y=bin_stats["median_ratio_pct"].values,
+                    marker=dict(color=_TIMESERIES_LINE_COLORS["power"]),
+                    text=[f"{n:,.0f} điểm" if pd.notna(n) else "0 điểm" for n in bin_stats["n_points"]],
+                    textposition="outside",
+                )])
+                yaw_fig.update_layout(
+                    title=f"Performance Ratio trung vị theo bin |Yaw Error| — {selected}",
+                    xaxis_title="|Yaw Error| (°)", yaxis_title="Performance Ratio trung vị (%)",
+                )
+                st.plotly_chart(yaw_fig, width="stretch")
+                st.caption(
+                    "Performance ratio = actual power / reachable power (Site 1: trực tiếp "
+                    "TheoActiveW; Site 2: ước lượng qua power curve). Chỉ tính trên các điểm "
+                    "reachable power > 0 — mục đích: xem ratio có giảm khi yaw error tăng không."
+                )
+
+    # ---------- Phần B: Temperature vs Power (CHỈ Site 2 — tự ẩn ở Site 1) ----------
+    if site == "site2":
+        st.markdown("### 🌡️ Temperature vs Power")
+        temp_candidates = [
+            "TEMPERATURE_GEARBOX_OIL", "TEMPERATURE_STATOR", "TEMPERATURE_MAIN_BEARING",
+            "TEMPERATURE_AVG_MOTORS_HUB", "TEMPERATURE_EXTERNAL",
+        ]
+        available_temp_cols = [c for c in temp_candidates if c in df.columns]
+        if not available_temp_cols:
+            st.info("Dataset này không có cột nhiệt độ nào trong 5 cột kỳ vọng của Site 2.")
+        else:
+            temp_column = st.selectbox(
+                "Chọn cột nhiệt độ:", available_temp_cols, key=f"crossanalysis_temp_select_{selected}",
+            )
+            temp_df = df[[power_column, temp_column]].astype(float).dropna()
+            temp_df.columns = ["power", "temperature"]
+
+            # TAI DUNG _POWER_CURVE_SAMPLE_SIZE (8000) — dung Y HET nguong sampling cua
+            # tab Power Curve, tranh render cham voi dataset lon (WT1-4 ~29MB moi file).
+            total_points = len(temp_df)
+            sample_note = None
+            if total_points > _POWER_CURVE_SAMPLE_SIZE:
+                temp_df = temp_df.sample(n=_POWER_CURVE_SAMPLE_SIZE, random_state=42)
+                sample_note = (
+                    f"Hiển thị mẫu ngẫu nhiên {_POWER_CURVE_SAMPLE_SIZE:,} điểm trên tổng "
+                    f"{total_points:,} điểm (tránh render chậm với dataset lớn)."
+                )
+
+            temp_fig = go.Figure(data=[go.Scatter(
+                x=temp_df["power"], y=temp_df["temperature"], mode="markers",
+                marker=dict(size=4, color=_TIMESERIES_LINE_COLORS["power"], opacity=0.5),
+            )])
+            temp_fig.update_layout(
+                title=f"{temp_column} vs Power — {selected}",
+                xaxis_title=f"Power ({power_column})", yaxis_title=f"{temp_column} (°C)",
+            )
+            st.plotly_chart(temp_fig, width="stretch")
+            if sample_note:
+                st.caption(sample_note)
+            st.caption(
+                "Mục đích: phát hiện nhiệt độ tăng bất thường ở cùng mức công suất (so với "
+                "các điểm khác cùng mức Power)."
+            )
+    else:
+        st.caption(
+            "ℹ️ Phần B (Temperature vs Power) chỉ áp dụng cho Site 2 — dataset Site 1 (GT1) "
+            "không có cột nhiệt độ nào."
+        )
+
+
 def render_wind_turbine_dashboard():
-    # Tab MOI (thu 11) them vao CUOI danh sach — KHONG chen giua/doi lai 10 tab hien co
-    # (khong doi ten bien tab0..tab9, khong doi thu tu) de dam bao dung rang buoc "khong
-    # dung 10 tab hien co" tuyet doi, ke ca phan wiring nay.
-    tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
+    # Tab MOI (thu 12) them vao CUOI danh sach — KHONG chen giua/doi lai 11 tab hien co
+    # (khong doi ten bien tab0..tab10, khong doi thu tu) de dam bao dung rang buoc
+    # "khong dung 11 tab hien co" tuyet doi, ke ca phan wiring nay.
+    tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11 = st.tabs([
         "🏭 Wind Farm Level", "📈 Power Curve & Trạng Thái", "🗓️ Biến động Power Curve theo Thời gian",
         "⏱️ Runtime Analysis", "📋 Tổng quan", "📈 Power Curve", "🕐 Timeline", "🔍 Diagnostic",
-        "📊 KPI Summary", "🔍 Overview theo Turbine", "📉 Time Series & Time Profile",
+        "📊 KPI Summary", "🔍 Overview theo Turbine", "📉 Time Series & Time Profile", "🔀 Cross-Analysis",
     ])
     with tab0:
         _render_wind_farm_level_tab()
@@ -2018,6 +2159,8 @@ def render_wind_turbine_dashboard():
         _render_turbine_overview_tab()
     with tab10:
         _render_timeseries_profile_tab()
+    with tab11:
+        _render_cross_analysis_tab()
 
 
 def render_chat():
