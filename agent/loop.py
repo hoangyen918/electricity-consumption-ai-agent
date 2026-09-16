@@ -51,6 +51,50 @@ def _tools_for_next_call(trace: list[dict]) -> list[dict]:
     return ALL_TOOL_SCHEMAS
 
 
+# Quan sat that (eval group_006, run 20260909_160757 — "So sánh độ ẩm trung bình giữa
+# tháng 6 và tháng 12?"): model goi get_dataset_summary({}) 3 LAN LIEN TIEP giong het
+# nhau (khong tien trien gi), roi moi goi aggregate_metric 2 lan (thang 6 + thang 12,
+# THANH CONG, du du lieu de tra loi) — nhung da het max_agent_iterations (5) ngay sau
+# do, roi vao cau xin loi co dinh, VUT BO 2 ket qua aggregate_metric da co that. Day
+# la NHAC MEM (qua prompt) chu KHONG chan cung nhu MAX_SEARCH_KB_CALLS — hien tuong
+# nay moi quan sat DUNG 1 LAN, chua du bang chung de chan cung nhu search-loop (da
+# quan sat lap lai nhieu lan, du co so xay dung guard cung).
+_REDUNDANT_CALL_NOTICE_TEMPLATE = (
+    "Lưu ý: Bạn vừa gọi lại {tool_name} với argument giống hệt lần trước — nếu không "
+    "có lý do mới, hãy dùng kết quả đã có hoặc chuyển sang bước khác."
+)
+
+
+def _is_redundant_call(tool_name: str, arguments: dict, trace: list[dict]) -> bool:
+    """
+    Trả True nếu (tool_name, arguments) NÀY đã được gọi THÀNH CÔNG (ok=True) ít nhất 1
+    lần TRƯỚC ĐÓ trong trace của CÙNG lượt hỏi hiện tại (trace reset mỗi lần gọi
+    run_agent_loop() mới, xem bên dưới — không rò rỉ qua các câu hỏi khác trong cùng
+    session). So khớp arguments bằng dict equality (Python so sánh dict bỏ qua thứ tự
+    key) — CHỈ bắt đúng trường hợp lặp Y HỆT đã quan sát thật (group_006:
+    get_dataset_summary({}) x3 liên tiếp), KHÔNG cố xử lý các biến thể "tương đương
+    nhưng khác kiểu" (vd "5" so với 5) — chưa có bằng chứng cần thiết cho việc đó.
+    """
+    return any(
+        t["tool_name"] == tool_name and t["arguments"] == arguments and t["result"]["ok"]
+        for t in trace
+    )
+
+
+# Quan sat that (case group_006 nhu tren): het max_agent_iterations sau khi DA CO du
+# lieu that tu tool call thanh cong (2x aggregate_metric) van tra ve cau xin loi co
+# dinh, vut bo toan bo cong da lam. FINAL_SYNTHESIS_PROMPT chi dung 1 LAN, NGOAI ngan
+# sach max_agent_iterations (khong lam vong lap chinh chay them, khong doi
+# MAX_AGENT_ITERATIONS hien co) — ep model tong hop tu nhung gi DA CO thay vi tiep tuc
+# goi tool (chat_completion() goi KHONG kem "tools" -> model khong the goi tool nao
+# nua, bat buoc tra loi bang text).
+FINAL_SYNTHESIS_PROMPT = (
+    "Bạn đã hết ngân sách để gọi thêm tool. Dựa vào TOÀN BỘ kết quả tool đã có trong "
+    "lịch sử, hãy tổng hợp câu trả lời TỐT NHẤT CÓ THỂ, và nói rõ phần nào chưa hoàn "
+    "thành nếu có."
+)
+
+
 def _call_with_empty_content_retry(messages: list, tools: list[dict]) -> tuple:
     """
     Gọi chat_completion(), nếu response không có tool_calls VÀ content rỗng/None
@@ -95,6 +139,15 @@ def run_agent_loop(messages: list, dataset_manager: DatasetManager) -> dict:
             "hit_max_iterations": bool,
             "usage_per_call": list[dict],  # input/output tokens mỗi lần gọi LLM, cho M8 dùng
             "empty_content_retries": int,  # số lần phải retry do provider trả content rỗng
+            "graceful_termination": bool,  # True nếu hit_max_iterations NHƯNG vẫn tổng
+                                            # hợp được câu trả lời thật từ tool call đã
+                                            # thành công (xem FINAL_SYNTHESIS_PROMPT) —
+                                            # hit_max_iterations vẫn giữ nguyên =True
+                                            # trong trường hợp này (ngân sách tool-call
+                                            # THẬT SỰ đã hết), chỉ thêm field này để
+                                            # phân biệt "hết ngân sách nhưng có trả lời
+                                            # thật" với "hết ngân sách, không trả lời
+                                            # được gì" (fallback cũ)
         }
     """
     trace = []
@@ -126,6 +179,10 @@ def run_agent_loop(messages: list, dataset_manager: DatasetManager) -> dict:
                 except json.JSONDecodeError:
                     arguments = {}
 
+                # Kiem tra TRUOC khi goi + TRUOC khi tu them entry nay vao trace (neu
+                # khong se luon tu-khop voi chinh no).
+                is_redundant = _is_redundant_call(tool_name, arguments, trace)
+
                 result = execute_tool(tool_name, arguments, dataset_manager)
 
                 trace.append({
@@ -140,6 +197,12 @@ def run_agent_loop(messages: list, dataset_manager: DatasetManager) -> dict:
                     "tool_call_id": tool_call.id,
                     "content": json.dumps(result, ensure_ascii=False),
                 })
+
+                if is_redundant:
+                    messages.append({
+                        "role": "user",
+                        "content": _REDUNDANT_CALL_NOTICE_TEMPLATE.format(tool_name=tool_name),
+                    })
             continue
 
         else:
@@ -166,6 +229,7 @@ def run_agent_loop(messages: list, dataset_manager: DatasetManager) -> dict:
                     "hit_max_iterations": False,
                     "usage_per_call": usage_per_call,
                     "empty_content_retries": total_empty_retries,
+                    "graceful_termination": False,
                 }
             messages.append({"role": "assistant", "content": message.content})
             return {
@@ -175,7 +239,57 @@ def run_agent_loop(messages: list, dataset_manager: DatasetManager) -> dict:
                 "hit_max_iterations": False,
                 "usage_per_call": usage_per_call,
                 "empty_content_retries": total_empty_retries,
+                "graceful_termination": False,
             }
+
+    # Het ngan sach max_agent_iterations (khong doi so nay). TRUOC KHI tra cau xin loi
+    # co dinh (vut bo toan bo cong da lam — dung bug that quan sat o group_006), kiem
+    # tra: da co it nhat 1 tool call THANH CONG voi du lieu that chua? Neu co, thu tong
+    # hop cau tra loi tu du lieu do bang 1 lan goi LLM CUOI CUNG, NGOAI ngan sach
+    # max_agent_iterations (khong lam vong lap chinh chay them buoc nao) — xem
+    # FINAL_SYNTHESIS_PROMPT o tren.
+    has_successful_tool_call = any(t["result"]["ok"] for t in trace)
+    if has_successful_tool_call:
+        messages.append({"role": "user", "content": FINAL_SYNTHESIS_PROMPT})
+        synthesis_content = None
+        synthesis_response = None
+        try:
+            # KHONG truyen "tools" -> model khong the goi tool nao nua, bat buoc tra
+            # loi bang text (thay vi tool_choice="none", vi cach nay loai tool khoi
+            # request hoan toan, khong phu thuoc hanh vi tool_choice cua tung provider).
+            synthesis_response = chat_completion(messages)
+            synthesis_message = synthesis_response.choices[0].message
+            if (
+                synthesis_message.content
+                and synthesis_message.content.strip()
+                and not _looks_like_leaked_internal_tokens(synthesis_message.content)
+            ):
+                synthesis_content = synthesis_message.content
+        except Exception:
+            # Loi khi goi lan tong hop cuoi cung (vd het retry API) -> roi xuong
+            # fallback cu ben duoi, KHONG de loi nay lam crash ca Agent.ask().
+            synthesis_content = None
+
+        if synthesis_content:
+            if synthesis_response.usage:
+                usage_per_call.append({
+                    "iteration": iteration + 1,
+                    "input_tokens": synthesis_response.usage.prompt_tokens,
+                    "output_tokens": synthesis_response.usage.completion_tokens,
+                })
+            messages.append({"role": "assistant", "content": synthesis_content})
+            return {
+                "answer": synthesis_content,
+                "trace": trace,
+                "iterations": iteration,
+                "hit_max_iterations": True,
+                "usage_per_call": usage_per_call,
+                "empty_content_retries": total_empty_retries,
+                "graceful_termination": True,
+            }
+        # Tong hop that bai (content rong/leaked/exception) -> bo FINAL_SYNTHESIS_PROMPT
+        # vua them, khong de rac trong lich su hoi thoai, dung fallback cu ben duoi.
+        messages.pop()
 
     fallback_answer = (
         "Xin lỗi, yêu cầu này cần nhiều bước xử lý hơn giới hạn cho phép "
@@ -189,4 +303,5 @@ def run_agent_loop(messages: list, dataset_manager: DatasetManager) -> dict:
         "hit_max_iterations": True,
         "usage_per_call": usage_per_call,
         "empty_content_retries": total_empty_retries,
+        "graceful_termination": False,
     }

@@ -16,6 +16,8 @@ from agent.loop import (
     MAX_SEARCH_KB_CALLS,
     _looks_like_leaked_internal_tokens,
     EMPTY_CONTENT_MAX_RETRIES,
+    _is_redundant_call,
+    FINAL_SYNTHESIS_PROMPT,
 )
 from agent.tool_schemas import ALL_TOOL_SCHEMAS, CALCULATE_SCHEMA
 from tools.tool_results import success
@@ -172,6 +174,192 @@ def test_run_agent_loop_retries_then_succeeds_after_leaked_tokens():
     assert result["answer"] == "Curtailment là cắt giảm công suất."
     assert result["empty_content_retries"] == 1
     assert "<|" not in result["answer"]
+
+
+# =============================== _is_redundant_call — group_006 non-progress detection ===============================
+
+def test_is_redundant_call_true_for_same_tool_and_arguments_succeeded_before():
+    trace = [_fake_trace_entry("get_dataset_summary")]  # arguments={}, ok=True (xem success({}))
+    assert _is_redundant_call("get_dataset_summary", {}, trace) is True
+
+
+def test_is_redundant_call_false_for_different_arguments():
+    trace = [{"iteration": 1, "tool_name": "aggregate_metric",
+              "arguments": {"column": "humidity", "month": 6}, "result": success({})}]
+    assert _is_redundant_call("aggregate_metric", {"column": "humidity", "month": 12}, trace) is False
+
+
+def test_is_redundant_call_false_for_different_tool_name():
+    trace = [_fake_trace_entry("get_dataset_summary")]
+    assert _is_redundant_call("aggregate_metric", {}, trace) is False
+
+
+def test_is_redundant_call_false_when_prior_call_failed():
+    """Lan goi truoc THAT BAI (ok=False) khong tinh la 'da co ket qua that' — khong
+    nen coi lan goi lai la du thua, vi lan truoc chua thanh cong."""
+    trace = [{"iteration": 1, "tool_name": "get_dataset_summary", "arguments": {},
+              "result": {"ok": False, "error": "lỗi tạm thời"}}]
+    assert _is_redundant_call("get_dataset_summary", {}, trace) is False
+
+
+def test_is_redundant_call_false_on_empty_trace():
+    assert _is_redundant_call("get_dataset_summary", {}, []) is False
+
+
+def test_run_agent_loop_injects_notice_message_on_redundant_call():
+    """Lap lai DUNG kich ban group_006 (rut gon 2 buoc): get_dataset_summary({}) goi
+    2 LAN LIEN TIEP giong het -> lan 2 phai duoc coi la du thua, va 1 message nhac
+    mem phai duoc chen vao messages TRUOC khi goi LLM lan tiep theo."""
+    tc1 = _fake_tool_call("call_1", "get_dataset_summary", "{}")
+    tc2 = _fake_tool_call("call_2", "get_dataset_summary", "{}")
+    msg1 = _fake_message(tool_calls=[tc1], content=None)
+    msg2 = _fake_message(tool_calls=[tc2], content=None)
+    msg3 = _fake_message(tool_calls=None, content="Dataset có 100 dòng.")
+
+    responses = [_fake_response(msg1), _fake_response(msg2), _fake_response(msg3)]
+    messages = [{"role": "user", "content": "Dataset có bao nhiêu dòng?"}]
+
+    with patch("agent.loop.chat_completion", side_effect=responses), \
+         patch("agent.loop.execute_tool", return_value=success({"rows": 100})):
+        result = run_agent_loop(messages, dataset_manager=MagicMock())
+
+    assert result["answer"] == "Dataset có 100 dòng."
+    notice_messages = [
+        m for m in messages
+        if m.get("role") == "user" and "giống hệt lần trước" in m.get("content", "")
+    ]
+    assert len(notice_messages) == 1
+    assert "get_dataset_summary" in notice_messages[0]["content"]
+
+
+# =============================== Graceful termination khi het max_agent_iterations (group_006) ===============================
+
+def test_run_agent_loop_synthesizes_answer_from_partial_data_when_hitting_max_iterations(monkeypatch):
+    """Tai hien DUNG kich ban group_006 that (rut gon max_iter=3 de test nhanh, co
+    che khong doi): 2 lan get_dataset_summary({}) trung lap (lan 2 du thua) roi 1 lan
+    aggregate_metric THANH CONG voi du lieu that -> het ngan sach tool-call (max_iter)
+    -> PHAI thu tong hop cau tra loi tu du lieu da co (KHONG con la cau xin loi co
+    dinh cu), va hit_max_iterations VAN la True (ngan sach tool that su da het)."""
+    monkeypatch.setattr("agent.loop.SETTINGS.max_agent_iterations", 3)
+
+    tc1 = _fake_tool_call("call_1", "get_dataset_summary", "{}")
+    tc2 = _fake_tool_call("call_2", "get_dataset_summary", "{}")
+    tc3 = _fake_tool_call("call_3", "aggregate_metric", '{"column": "humidity", "month": 6}')
+    msg1 = _fake_message(tool_calls=[tc1], content=None)
+    msg2 = _fake_message(tool_calls=[tc2], content=None)
+    msg3 = _fake_message(tool_calls=[tc3], content=None)
+    synthesis_msg = _fake_message(
+        tool_calls=None,
+        content="Độ ẩm trung bình tháng 6 là 68.64 (dựa trên dữ liệu đã thu thập được).",
+    )
+
+    responses = [
+        _fake_response(msg1), _fake_response(msg2), _fake_response(msg3),
+        _fake_response(synthesis_msg),
+    ]
+
+    def fake_execute_tool(tool_name, arguments, dataset_manager):
+        if tool_name == "aggregate_metric":
+            return success({"result": 68.64})
+        return success({"datasets": ["tetouan.csv"]})
+
+    with patch("agent.loop.chat_completion", side_effect=responses), \
+         patch("agent.loop.execute_tool", side_effect=fake_execute_tool):
+        result = run_agent_loop(
+            [{"role": "user", "content": "So sánh độ ẩm trung bình giữa tháng 6 và tháng 12?"}],
+            dataset_manager=MagicMock(),
+        )
+
+    assert result["hit_max_iterations"] is True
+    assert result["graceful_termination"] is True
+    assert "68.64" in result["answer"]
+    assert "Xin lỗi, yêu cầu này cần nhiều bước xử lý" not in result["answer"]
+    assert len(result["trace"]) == 3
+
+
+def test_run_agent_loop_falls_back_to_old_message_when_no_successful_tool_call(monkeypatch):
+    """Neu KHONG co tool call nao thanh cong (that bai tu dau), giu nguyen fallback cu
+    — khong co gi de tong hop, dung goi them 1 lan LLM vo ich."""
+    monkeypatch.setattr("agent.loop.SETTINGS.max_agent_iterations", 2)
+
+    tc1 = _fake_tool_call("call_1", "aggregate_metric", "{}")
+    tc2 = _fake_tool_call("call_2", "aggregate_metric", "{}")
+    msg1 = _fake_message(tool_calls=[tc1], content=None)
+    msg2 = _fake_message(tool_calls=[tc2], content=None)
+    responses = [_fake_response(msg1), _fake_response(msg2)]
+
+    with patch("agent.loop.chat_completion", side_effect=responses), \
+         patch("agent.loop.execute_tool", return_value={"ok": False, "error": "Dataset không tồn tại."}):
+        result = run_agent_loop([{"role": "user", "content": "Câu hỏi?"}], dataset_manager=MagicMock())
+
+    assert result["hit_max_iterations"] is True
+    assert result["graceful_termination"] is False
+    assert result["answer"] == (
+        "Xin lỗi, yêu cầu này cần nhiều bước xử lý hơn giới hạn cho phép "
+        "(2 bước). Vui lòng thử chia nhỏ câu hỏi."
+    )
+
+
+def test_run_agent_loop_falls_back_when_synthesis_call_itself_fails(monkeypatch):
+    """Neu co tool call thanh cong nhung LAN GOI TONG HOP CUOI CUNG that bai (vd loi
+    API sau khi het retry) -> phai roi ve fallback cu, KHONG crash, va KHONG de rac
+    FINAL_SYNTHESIS_PROMPT nam lai trong messages history."""
+    monkeypatch.setattr("agent.loop.SETTINGS.max_agent_iterations", 1)
+
+    tc1 = _fake_tool_call("call_1", "aggregate_metric", "{}")
+    msg1 = _fake_message(tool_calls=[tc1], content=None)
+
+    def raise_on_second_call(*args, **kwargs):
+        raise RuntimeError("Chat completion failed after 3 attempts")
+
+    responses = [_fake_response(msg1)]
+    call_count = {"n": 0}
+
+    def side_effect(*args, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return responses[0]
+        raise RuntimeError("Chat completion failed after 3 attempts")
+
+    messages = [{"role": "user", "content": "Câu hỏi?"}]
+    with patch("agent.loop.chat_completion", side_effect=side_effect), \
+         patch("agent.loop.execute_tool", return_value=success({"result": 42})):
+        result = run_agent_loop(messages, dataset_manager=MagicMock())
+
+    assert result["hit_max_iterations"] is True
+    assert result["graceful_termination"] is False
+    assert result["answer"] == (
+        "Xin lỗi, yêu cầu này cần nhiều bước xử lý hơn giới hạn cho phép "
+        "(1 bước). Vui lòng thử chia nhỏ câu hỏi."
+    )
+    # FINAL_SYNTHESIS_PROMPT phai duoc don dep, khong con sot trong lich su hoi thoai
+    assert not any(m.get("content") == FINAL_SYNTHESIS_PROMPT for m in messages)
+
+
+def test_run_agent_loop_falls_back_when_synthesis_call_no_tool_kwarg(monkeypatch):
+    """Xac nhan lan goi tong hop cuoi cung KHONG truyen 'tools' — model bi buoc phai
+    tra loi bang text, khong the goi them tool nao."""
+    monkeypatch.setattr("agent.loop.SETTINGS.max_agent_iterations", 1)
+
+    tc1 = _fake_tool_call("call_1", "aggregate_metric", "{}")
+    msg1 = _fake_message(tool_calls=[tc1], content=None)
+    synthesis_msg = _fake_message(tool_calls=None, content="Kết quả: 42.")
+
+    captured_calls = []
+
+    def side_effect(*args, **kwargs):
+        captured_calls.append(kwargs)
+        if len(captured_calls) == 1:
+            return _fake_response(msg1)
+        return _fake_response(synthesis_msg)
+
+    with patch("agent.loop.chat_completion", side_effect=side_effect), \
+         patch("agent.loop.execute_tool", return_value=success({"result": 42})):
+        result = run_agent_loop([{"role": "user", "content": "Câu hỏi?"}], dataset_manager=MagicMock())
+
+    assert result["graceful_termination"] is True
+    assert len(captured_calls) == 2
+    assert "tools" not in captured_calls[1]
 
 
 def test_run_agent_loop_falls_back_cleanly_when_leaked_tokens_persist_past_retry_budget():
