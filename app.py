@@ -1839,11 +1839,162 @@ def _render_turbine_overview_tab():
         )
 
 
+# Mau dung CHUNG cho ca 4 duong trong tab Time Series — dong bo voi cac hex da dung san
+# trong _CLASSIFICATION_STATUS_COLORS (#1f77b4/#ff7f0e), tranh tao he mau moi rieng cho
+# 1 tab (giu dashboard nhat quan ve mat thi giac).
+_TIMESERIES_LINE_COLORS = {
+    "power": "#1f77b4",
+    "wind_speed": "#ff7f0e",
+    "pitch": "#2ca02c",
+    "yaw_error": "#9467bd",
+}
+
+
+def _render_timeseries_profile_tab():
+    """Tab MOI — 2 phan: (A) time series nhieu duong (Power/Wind speed/Pitch/Yaw error)
+    trong 1 khoang ngay chon, (B) time profile trung binh Power theo gio trong ngay
+    (0-23), tinh tren CHINH khoang ngay da chon o Phan A. TAI DUNG HOAN TOAN
+    _detect_site/_power_wind_columns/get_yaw_error/_available_turbine_datasets/
+    _ensure_wind_turbine_dataset_loaded da co, khong tinh lai logic nao co san.
+
+    Truc phu (secondary y-axis) cho Wind speed la YEU CAU RO RANG cua nguoi dung (thang
+    gia tri khac han Power: m/s don vi so voi kW hang nghin) — Pitch/Yaw error (cung don
+    vi do, khong noi ro truc nao) gop CHUNG truc phu voi Wind speed thay vi tao them truc
+    thu 3 (qua nhieu truc tren 1 chart gay roi, khong ai yeu cau rieng)."""
+    st.subheader("📉 Time Series & Time Profile")
+    manager = _get_wind_turbine_manager()
+    selected = st.selectbox("Chọn dataset:", _available_turbine_datasets(manager), key="timeseries_dataset_select")
+
+    if not _ensure_wind_turbine_dataset_loaded(manager, selected):
+        return
+
+    df = manager.get_dataframe(selected)
+    site = _detect_site(df)
+    if site is None:
+        st.error("Không nhận diện được cấu trúc turbine gió cho dataset này.")
+        return
+    if "datetime" not in df.columns or "hour" not in df.columns:
+        st.error("Dataset không có cột 'datetime'/'hour' đã derive — không thể vẽ time series/time profile.")
+        return
+
+    power_column, wind_speed_column = _power_wind_columns(site)
+
+    # Pitch trung binh — Site 1: trung binh 3 canh GT1.Pitch.Angle1/2/3; Site 2: cot
+    # PITCH co san (KHONG tach 3 canh nhu Site 1).
+    if site == "site1":
+        pitch_cols = ["GT1.Pitch.Angle1", "GT1.Pitch.Angle2", "GT1.Pitch.Angle3"]
+    else:
+        pitch_cols = ["PITCH"]
+    has_pitch = all(c in df.columns for c in pitch_cols)
+
+    # ---------- Phần A: Time series ----------
+    st.markdown("### 📈 Time Series")
+
+    data_min = df["datetime"].min().date()
+    data_max = df["datetime"].max().date()
+    # Mac dinh 7 ngay GAN NHAT theo du lieu that (khong phai toan bo 2-5 nam) — tranh
+    # ve qua nhieu diem cung luc gay roi/cham. key PHAI rieng theo TUNG dataset — xem
+    # comment giai thich chi tiet trong _render_timeline_tab() (fix bug treo AppTest).
+    default_start = max(data_min, data_max - pd.Timedelta(days=7))
+    date_range = st.date_input(
+        "Khoảng thời gian:", value=(default_start, data_max),
+        min_value=data_min, max_value=data_max, key=f"timeseries_date_range_{selected}",
+    )
+    if len(date_range) != 2:
+        st.info("Chọn đủ 2 mốc ngày (bắt đầu và kết thúc).")
+        return
+    start_date, end_date = date_range
+    if start_date > end_date:
+        st.error("Ngày bắt đầu phải trước ngày kết thúc.")
+        return
+
+    mask = (df["datetime"].dt.date >= start_date) & (df["datetime"].dt.date <= end_date)
+    filtered = df.loc[mask]
+    if filtered.empty:
+        st.info(f"Không có dữ liệu trong khoảng {start_date} → {end_date}.")
+        return
+
+    # get_yaw_error() tu raise ValueError neu thieu cot can thiet — bat loi de bo qua
+    # duong Yaw error thay vi crash ca tab (KHONG lap lai danh sach cot no can, tranh
+    # trung logic voi ham get_yaw_error()).
+    try:
+        yaw_error_filtered = get_yaw_error(filtered, site)
+    except ValueError:
+        yaw_error_filtered = None
+    has_yaw = yaw_error_filtered is not None
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=filtered["datetime"], y=filtered[power_column], mode="lines",
+        name=f"Power ({power_column})",
+        line=dict(color=_TIMESERIES_LINE_COLORS["power"], width=1.5),
+    ))
+    fig.add_trace(go.Scatter(
+        x=filtered["datetime"], y=filtered[wind_speed_column], mode="lines",
+        name=f"Wind Speed ({wind_speed_column})",
+        line=dict(color=_TIMESERIES_LINE_COLORS["wind_speed"], width=1.5),
+        yaxis="y2",
+    ))
+    if has_pitch:
+        pitch_mean = filtered[pitch_cols].astype(float).mean(axis=1)
+        fig.add_trace(go.Scatter(
+            x=filtered["datetime"], y=pitch_mean, mode="lines",
+            name="Pitch trung bình (°)",
+            line=dict(color=_TIMESERIES_LINE_COLORS["pitch"], width=1.5),
+            yaxis="y2",
+        ))
+    if has_yaw:
+        fig.add_trace(go.Scatter(
+            x=filtered["datetime"], y=yaw_error_filtered, mode="lines",
+            name="Yaw Error (°)",
+            line=dict(color=_TIMESERIES_LINE_COLORS["yaw_error"], width=1.5),
+            yaxis="y2",
+        ))
+
+    fig.update_layout(
+        title=f"Time Series — {selected} ({start_date} → {end_date})",
+        xaxis_title="Thời gian",
+        yaxis=dict(title=f"Power ({power_column})"),
+        yaxis2=dict(title="Wind Speed / Pitch / Yaw Error", overlaying="y", side="right"),
+        legend_title="Đại lượng",
+    )
+    st.plotly_chart(fig, width="stretch")
+
+    missing_notes = []
+    if not has_pitch:
+        missing_notes.append(f"Pitch (thiếu cột {pitch_cols})")
+    if not has_yaw:
+        missing_notes.append("Yaw Error (thiếu cột cần thiết)")
+    if missing_notes:
+        st.caption(f"⚠️ Dataset này thiếu dữ liệu cho: {'; '.join(missing_notes)} — không vẽ đường tương ứng.")
+    st.caption(f"{len(filtered):,} điểm dữ liệu trong khoảng {start_date} → {end_date}.")
+
+    # ---------- Phần B: Time profile theo giờ (tren CHINH khoang da chon o Phan A) ----------
+    st.markdown("### 🕐 Time Profile — Power trung bình theo giờ trong ngày")
+    hourly_mean = filtered.groupby("hour")[power_column].mean().reindex(range(24))
+    profile_fig = go.Figure(data=[go.Bar(
+        x=list(range(24)), y=hourly_mean.values,
+        marker=dict(color=_TIMESERIES_LINE_COLORS["power"]),
+    )])
+    profile_fig.update_layout(
+        title=f"Time Profile — {selected} ({start_date} → {end_date})",
+        xaxis_title="Giờ trong ngày", yaxis_title=f"Power trung bình ({power_column})",
+        xaxis=dict(tickmode="linear", dtick=1),
+    )
+    st.plotly_chart(profile_fig, width="stretch")
+    st.caption(
+        f"Power trung bình theo từng giờ (0-23), tính trên khoảng {start_date} → {end_date} đã chọn ở Phần A."
+    )
+
+
 def render_wind_turbine_dashboard():
-    tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
+    # Tab MOI (thu 11) them vao CUOI danh sach — KHONG chen giua/doi lai 10 tab hien co
+    # (khong doi ten bien tab0..tab9, khong doi thu tu) de dam bao dung rang buoc "khong
+    # dung 10 tab hien co" tuyet doi, ke ca phan wiring nay.
+    tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
         "🏭 Wind Farm Level", "📈 Power Curve & Trạng Thái", "🗓️ Biến động Power Curve theo Thời gian",
         "⏱️ Runtime Analysis", "📋 Tổng quan", "📈 Power Curve", "🕐 Timeline", "🔍 Diagnostic",
-        "📊 KPI Summary", "🔍 Overview theo Turbine",
+        "📊 KPI Summary", "🔍 Overview theo Turbine", "📉 Time Series & Time Profile",
     ])
     with tab0:
         _render_wind_farm_level_tab()
@@ -1865,6 +2016,8 @@ def render_wind_turbine_dashboard():
         _render_kpi_summary_tab()
     with tab9:
         _render_turbine_overview_tab()
+    with tab10:
+        _render_timeseries_profile_tab()
 
 
 def render_chat():
