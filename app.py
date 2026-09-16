@@ -2196,40 +2196,52 @@ def _render_kb_explorer_tab():
 
 
 def render_wind_turbine_dashboard():
-    # Tab MOI (thu 13) them vao CUOI danh sach — KHONG chen giua/doi lai 12 tab hien co
-    # (khong doi ten bien tab0..tab11, khong doi thu tu) de dam bao dung rang buoc
-    # "khong dung 12 tab hien co" tuyet doi, ke ca phan wiring nay.
+    # Thu tu 13 tab sap xep theo MACH LOGIC PHAN TICH (rong -> sau -> thoi gian -> xong
+    # xuoi -> cong cu phu), KHONG con theo thu tu them tab lich su nua — xem yeu cau
+    # "Bo cuc lai thu tu 13 tab" (2026-09). CHI hoan vi loi goi (danh sach st.tabs() +
+    # cac khoi "with tabN:"), KHONG doi bat ky gi ben trong than cac ham _render_*_tab().
+    #   Nhom 1 - Vao cuoc: Wind Farm Level, Overview theo Turbine
+    #   Nhom 2 - Power curve & phan loai: Power Curve, Power Curve & Trang Thai, Timeline
+    #   Nhom 3 - Theo thoi gian: Bien dong Power Curve theo Thoi gian, Runtime Analysis,
+    #            Time Series & Time Profile
+    #   Nhom 4 - Chan doan nguyen nhan: Cross-Analysis, Diagnostic
+    #   Nhom 5 - Du lieu tho & KPI: Tong quan, KPI Summary
+    #   Nhom 6 - Cong cu phu (khac domain han, de cuoi cung cho ro): KB Explorer
     tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12 = st.tabs([
-        "🏭 Wind Farm Level", "📈 Power Curve & Trạng Thái", "🗓️ Biến động Power Curve theo Thời gian",
-        "⏱️ Runtime Analysis", "📋 Tổng quan", "📈 Power Curve", "🕐 Timeline", "🔍 Diagnostic",
-        "📊 KPI Summary", "🔍 Overview theo Turbine", "📉 Time Series & Time Profile", "🔀 Cross-Analysis",
-        "🗄️ KB Explorer",
+        "🏭 Wind Farm Level", "🔍 Overview theo Turbine", "📈 Power Curve", "📈 Power Curve & Trạng Thái",
+        "🕐 Timeline", "🗓️ Biến động Power Curve theo Thời gian", "⏱️ Runtime Analysis",
+        "📉 Time Series & Time Profile", "🔀 Cross-Analysis", "🔍 Diagnostic", "📋 Tổng quan",
+        "📊 KPI Summary", "🗄️ KB Explorer",
     ])
     with tab0:
         _render_wind_farm_level_tab()
     with tab1:
-        _render_power_curve_classification_tab()
-    with tab2:
-        _render_temporal_heatmap_tab()
-    with tab3:
-        _render_runtime_analysis_tab()
-    with tab4:
-        _render_overview_tab()
-    with tab5:
-        _render_power_curve_tab()
-    with tab6:
-        _render_timeline_tab()
-    with tab7:
-        _render_diagnostic_tab()
-    with tab8:
-        _render_kpi_summary_tab()
-    with tab9:
         _render_turbine_overview_tab()
-    with tab10:
+    with tab2:
+        _render_power_curve_tab()
+    with tab3:
+        _render_power_curve_classification_tab()
+    with tab4:
+        _render_timeline_tab()
+    with tab5:
+        _render_temporal_heatmap_tab()
+    with tab6:
+        _render_runtime_analysis_tab()
+    with tab7:
         _render_timeseries_profile_tab()
-    with tab11:
+    with tab8:
         _render_cross_analysis_tab()
+    with tab9:
+        _render_diagnostic_tab()
+    with tab10:
+        _render_overview_tab()
+    with tab11:
+        _render_kpi_summary_tab()
     with tab12:
+        # Cong cu phu, khac domain han (duyet Knowledge Base RAG, khong phai phan tich
+        # turbine) — them 1 dong ngan de tach biet ro voi 12 tab phan tich phia truoc,
+        # KHONG doi gi ben trong _render_kb_explorer_tab().
+        st.caption("🔧 Công cụ phụ — khác domain phân tích turbine (duyệt Knowledge Base RAG)")
         _render_kb_explorer_tab()
 
 
