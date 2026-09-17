@@ -11,6 +11,8 @@ data/raw/*
 data/processed/*
 !data/processed/.gitkeep
 data/wind_turbine/
+data/column_mappings/*
+!data/column_mappings/.gitkeep
 .pytest_cache/
 .DS_Store
 *.egg-info/

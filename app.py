@@ -27,6 +27,9 @@ from config.settings import SETTINGS
 from rag.vector_store import count_documents, get_collection
 from rag.retriever import SCORE_THRESHOLD, retrieve
 from rag.kb_manager import load_sources
+from tools.column_mapping import (
+    suggest_column_mapping, save_column_mapping, load_column_mapping, looks_like_turbine_data,
+)
 from evals.run_evals import REFUSAL_PATTERNS, THRESHOLDS
 from evals.llm_judge import diagnose_rag_quality
 
@@ -141,6 +144,74 @@ def handle_upload(uploaded_file):
         Path(tmp_path).unlink(missing_ok=True)
 
 
+def _render_column_mapping_suggestion(dataset_name: str, df: pd.DataFrame, manager: DatasetManager) -> None:
+    """Khu vực đề xuất ánh xạ cột — CHỈ hiện khi _detect_site() không nhận diện được
+    (dataset KHÔNG khớp cấu trúc Site 1/Site 2 đã biết) VÀ đang ở Dashboard mode. Đặt
+    trong render_sidebar() (dùng CHUNG cho Chat/Dashboard, KHÔNG thuộc 13 tab) vì
+    sidebar là nơi DUY NHẤT có khái niệm "dataset active" rõ ràng, xuyên suốt — hầu
+    hết 13 tab Dashboard tự chọn dataset RIÊNG qua selectbox của từng tab, không có 1
+    "dataset đang chọn" chung để gắn UI này vào mà KHÔNG đụng logic 13 tab đó.
+
+    CHỈ đề xuất + lưu ánh xạ đã xác nhận — KHÔNG tự động áp dụng vào bất kỳ tool/tab
+    nào (xem docstring tools/column_mapping.py). Nối ánh xạ đã xác nhận vào 22 tool/13
+    tab hiện có là việc tích hợp LỚN RIÊNG, CHƯA làm ở đây."""
+    if st.session_state.get("view_mode") != "📊 Wind Turbine Dashboard":
+        return
+    if _detect_site(df) is not None:
+        return
+    if not looks_like_turbine_data(dataset_name, manager):
+        return
+
+    saved_mapping = load_column_mapping(list(df.columns))
+    if saved_mapping is not None:
+        st.caption(
+            "✅ Cấu trúc cột này đã có ánh xạ được xác nhận trước đó — tự động nhận diện "
+            f"lại, không cần hỏi lại: {saved_mapping}"
+        )
+        return
+
+    with st.expander("🔍 Cấu trúc chưa nhận diện được — đề xuất tự động", expanded=True):
+        st.caption(
+            "Dataset active không khớp cấu trúc Site 1 (GT1.*) hay Site 2 (ACTIVE_POWER+"
+            "WIND_SPEED) đã biết. Đề xuất dưới đây THUẦN rule-based (tên cột + giá trị "
+            "min/max) — KHÔNG gọi LLM/API nào, chỉ là gợi ý, bạn xác nhận/sửa trước khi lưu."
+        )
+        suggestion_key = f"colmap_suggestion_{dataset_name}"
+        if suggestion_key not in st.session_state:
+            st.session_state[suggestion_key] = suggest_column_mapping(dataset_name, manager)
+        suggestion = st.session_state[suggestion_key]
+
+        column_options = ["(Không có)"] + list(df.columns)
+        confirmed = {}
+        for field, info in suggestion.items():
+            if info["candidate"] is None:
+                # KHONG duoc de field nay "bien mat"/bi bo qua — hien RO RANG dong nay
+                # kem dropdown TRONG (khong pre-fill gi, mac dinh index 0 = "Khong co")
+                # de nguoi dung tu chon tay neu biet cot nao.
+                st.warning(
+                    f"`{field}` — Không tìm thấy ứng viên hợp lý — vui lòng chọn tay nếu biết cột nào."
+                )
+                chosen = st.selectbox(
+                    f"Chọn cột cho `{field}` (không có gợi ý tự động):",
+                    column_options, index=0, key=f"colmap_select_{dataset_name}_{field}",
+                )
+                st.caption(f"Chi tiết: {info['reason']}")
+            else:
+                default_idx = column_options.index(info["candidate"])
+                chosen = st.selectbox(
+                    f"`{field}` — gợi ý: {info['candidate']} ({info['confidence']})",
+                    column_options, index=default_idx, key=f"colmap_select_{dataset_name}_{field}",
+                )
+                st.caption(f"Lý do: {info['reason']}")
+            confirmed[field] = None if chosen == "(Không có)" else chosen
+
+        if st.button("✅ Xác nhận ánh xạ này", key=f"colmap_confirm_{dataset_name}"):
+            saved_path = save_column_mapping(list(df.columns), confirmed)
+            st.success(f"Đã lưu ánh xạ vào `{saved_path}`. Lần sau upload file có cùng bộ cột sẽ tự nhận diện.")
+            del st.session_state[suggestion_key]
+            st.rerun()
+
+
 def render_sidebar():
     with st.sidebar:
         st.header("⚡ Electricity Agent")
@@ -192,6 +263,8 @@ def render_sidebar():
                     )
                 st.write("**Preview:**")
                 st.dataframe(active_df.head(), width="stretch")
+
+                _render_column_mapping_suggestion(active_name, active_df, manager)
         else:
             st.warning(
                 "Chưa có dataset mặc định. Chạy `python scripts/prepare_data.py` "
