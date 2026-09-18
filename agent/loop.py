@@ -94,6 +94,18 @@ FINAL_SYNTHESIS_PROMPT = (
     "thành nếu có."
 )
 
+# 2 chuoi fallback CO DINH (khong phai model tra loi that) — tach thanh hang so o day
+# (thay vi hardcode inline) de app.py tai dung, phan biet DUNG "Đánh giá nhanh" fallback
+# ha tang voi tu choi that co suy luan (2 chuoi nay deu bat dau bang "Xin lỗi" nen bi
+# REFUSAL_PATTERNS trong evals/run_evals.py bat nham thanh "Từ chối" — xem app.py
+# _classify_answerability()). MAX_ITERATIONS_FALLBACK_PREFIX dung startswith() vi phan
+# con lai co so {max_iter} dong (hien tai luon la 5, nhung khong hardcode gia tri).
+EMPTY_CONTENT_FALLBACK_ANSWER = (
+    "Xin lỗi, hệ thống gặp sự cố tạm thời khi tạo câu trả lời. "
+    "Vui lòng thử hỏi lại câu hỏi này."
+)
+MAX_ITERATIONS_FALLBACK_PREFIX = "Xin lỗi, yêu cầu này cần nhiều bước xử lý hơn giới hạn cho phép ("
+
 
 def _call_with_empty_content_retry(messages: list, tools: list[dict]) -> tuple:
     """
@@ -217,10 +229,7 @@ def run_agent_loop(messages: list, dataset_manager: DatasetManager) -> dict:
                 or not message.content.strip()
                 or _looks_like_leaked_internal_tokens(message.content)
             ):
-                fallback_answer = (
-                    "Xin lỗi, hệ thống gặp sự cố tạm thời khi tạo câu trả lời. "
-                    "Vui lòng thử hỏi lại câu hỏi này."
-                )
+                fallback_answer = EMPTY_CONTENT_FALLBACK_ANSWER
                 messages.append({"role": "assistant", "content": fallback_answer})
                 return {
                     "answer": fallback_answer,
@@ -291,10 +300,7 @@ def run_agent_loop(messages: list, dataset_manager: DatasetManager) -> dict:
         # vua them, khong de rac trong lich su hoi thoai, dung fallback cu ben duoi.
         messages.pop()
 
-    fallback_answer = (
-        "Xin lỗi, yêu cầu này cần nhiều bước xử lý hơn giới hạn cho phép "
-        f"({max_iter} bước). Vui lòng thử chia nhỏ câu hỏi."
-    )
+    fallback_answer = f"{MAX_ITERATIONS_FALLBACK_PREFIX}{max_iter} bước). Vui lòng thử chia nhỏ câu hỏi."
     messages.append({"role": "assistant", "content": fallback_answer})
     return {
         "answer": fallback_answer,
