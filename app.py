@@ -2,7 +2,6 @@
 import json
 import re
 import tempfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -11,7 +10,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from tools.dataset_manager import DatasetManager, _detect_delimiter, derive_time_columns
+from tools.dataset_manager import DatasetManager
 from tools.data_cleaning_tools import clean_missing_values, detect_duplicates
 from tools.turbine_diagnostic_tools import (
     diagnose_theoretical_power_deviation, OPST_LABELS, calculate_turbine_kpis,
@@ -2363,34 +2362,6 @@ def _question_mentions_turbine(question: str) -> bool:
     return any(keyword in question_lower for keyword in TURBINE_QUESTION_KEYWORDS)
 
 
-def _load_one_fixed_dataset(name: str, path: str) -> tuple[str, pd.DataFrame | None, str | None, str | None]:
-    """Đọc + derive_time_columns() 1 file turbine cố định — chạy trong thread riêng
-    (xem ThreadPoolExecutor ở _bridge_wind_turbine_datasets_to_chat()). pandas.read_csv
-    là I/O-bound (giải phóng GIL khi chờ đĩa) nên chạy song song qua threading thực sự
-    tăng tốc — KHÁC với các bước TÍNH TOÁN CPU-bound (classify_turbine_status, estimate_
-    power_curve...), threading KHÔNG áp dụng ở đó, không đụng gì tới các bước đó.
-
-    Gộp CẢ derive_time_columns() vào đây (không để lại main thread sau khi gộp kết quả)
-    — đã đo THẬT (điều tra 2026-09-18): derive_time_columns() chiếm ~5.8s/10.9s tổng
-    thời gian nạp 5 file (hơn một nửa), nếu để lại main thread sẽ mất phần lớn lợi ích
-    song song hóa (vẫn phải chạy tuần tự ~5.8s dù phần đọc file đã song song xong).
-
-    KHÔNG gọi bất kỳ hàm st.* nào ở đây (st.spinner/st.error không an toàn ngoài
-    ScriptRunContext của luồng chính Streamlit) và KHÔNG ghi vào DatasetManager ở đây
-    (nhiều thread cùng ghi 1 dict Python không đảm bảo an toàn tuyệt đối) — chỉ trả kết
-    quả thô, caller ghi vào manager ở main thread SAU KHI as_completed() xác nhận xong.
-
-    Trả về error message (thay vì raise) nếu đọc/parse lỗi — lỗi 1 file KHÔNG làm hỏng
-    cả batch, các future khác trong ThreadPoolExecutor vẫn hoàn tất bình thường."""
-    try:
-        delimiter = _detect_delimiter(path)
-        df = pd.read_csv(path, sep=delimiter, encoding="utf-8-sig")
-        df, source_column = derive_time_columns(df)
-        return name, df, source_column, None
-    except Exception as exc:
-        return name, None, None, str(exc)
-
-
 def _bridge_wind_turbine_datasets_to_chat(question: str) -> None:
     """Cầu nối CHIỀU NGƯỢC (Dashboard -> Chat) — đối xứng với cầu nối đã có sẵn
     (Chat -> Dashboard, xem _available_turbine_datasets()/_ensure_wind_turbine_
@@ -2412,13 +2383,14 @@ def _bridge_wind_turbine_datasets_to_chat(question: str) -> None:
     kịp nạp MỘT PHẦN 5 file cố định trước khi user bấm chuyển sang Chat (Streamlit HỦY
     script run của tab Dashboard giữa chừng — không phải bug ở bridge, bug ở chỗ
     wind_turbine_manager không kịp có dữ liệu) — nạp TRỰC TIẾP các file cố định CÒN
-    THIẾU từ đĩa vào dataset_manager. SONG SONG HÓA (2026-09, đo THẬT ~10.9s tuần tự
-    trước đây) qua ThreadPoolExecutor — mỗi file đọc trong 1 thread riêng
-    (_load_one_fixed_dataset(), I/O-bound nên threading thực sự giúp), CHỈ ghi kết quả
-    vào chat_manager ở MAIN THREAD sau khi từng future hoàn tất (as_completed) — tránh
-    nhiều thread cùng ghi 1 dict. Lỗi 1 file (corrupt/mất) không làm hỏng các file khác.
+    THIẾU từ đĩa vào dataset_manager, dùng ĐÚNG _ensure_wind_turbine_dataset_loaded()
+    đã có (load_csv qua WIND_TURBINE_DATASET_PATHS), KHÔNG viết lại logic nạp file.
     Tự bỏ qua (không làm gì) nếu file đã có trong dataset_manager từ trước — không tốn
-    thêm chi phí ở các lượt chat sau khi đã nạp đủ."""
+    thêm chi phí ở các lượt chat sau khi đã nạp đủ.
+
+    Đã thử song song hóa (ThreadPoolExecutor) — đo thật lặp lại (cả Docker) cho thấy
+    KHÔNG cải thiện đáng tin cậy, biến thiên hệ thống lớn hơn lợi ích lý thuyết — giữ
+    tuần tự."""
     if not _question_mentions_turbine(question):
         return
 
@@ -2432,34 +2404,9 @@ def _bridge_wind_turbine_datasets_to_chat(question: str) -> None:
                 chat_manager.add_dataframe(wind_turbine_manager.get_dataframe(name), name=name)
                 existing_names.add(name)
 
-    to_load = []
     for key in WIND_TURBINE_DATASET_PATHS:
-        if key in existing_names:
-            continue
-        path = Path(WIND_TURBINE_DATASET_PATHS[key])
-        if not path.exists():
-            st.error(
-                f"Không tìm thấy file `{path}`. 5 file turbine gió không được git-track "
-                "(xem .gitignore) — cần tự copy vào đúng thư mục `data/wind_turbine/`."
-            )
-            continue
-        to_load.append((key, str(path)))
-
-    if not to_load:
-        return
-
-    paths_by_name = dict(to_load)
-    with st.spinner(f"Đang nạp song song {len(to_load)} file turbine..."):
-        with ThreadPoolExecutor(max_workers=len(to_load)) as executor:
-            futures = [executor.submit(_load_one_fixed_dataset, name, path) for name, path in to_load]
-            for future in as_completed(futures):
-                name, df, source_column, error = future.result()
-                if error is not None:
-                    st.error(f"Lỗi khi nạp dataset '{name}': {error}")
-                    continue
-                chat_manager.add_preloaded_dataframe(
-                    df, name, source_column, source_path=paths_by_name[name],
-                )
+        if key not in existing_names:
+            _ensure_wind_turbine_dataset_loaded(chat_manager, key)
 
 
 def _handle_chat_question(question: str) -> None:
