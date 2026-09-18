@@ -18,9 +18,11 @@ from agent.loop import (
     EMPTY_CONTENT_MAX_RETRIES,
     _is_redundant_call,
     FINAL_SYNTHESIS_PROMPT,
+    _check_budget_exceeded,
 )
 from agent.tool_schemas import ALL_TOOL_SCHEMAS, CALCULATE_SCHEMA
 from tools.tool_results import success
+from config.settings import SETTINGS
 
 # Chuỗi rác THẬT đã quan sát từ gpt-oss qua tunnel (không phải mẫu tự bịa) — xem
 # báo cáo verify guard search-limit, tái hiện được cả both_001 (search->calculate).
@@ -381,3 +383,172 @@ def test_run_agent_loop_falls_back_cleanly_when_leaked_tokens_persist_past_retry
         "Vui lòng thử hỏi lại câu hỏi này."
     )
     assert result["empty_content_retries"] == EMPTY_CONTENT_MAX_RETRIES
+
+
+# =============================== Request Budget (Phần 1/3) — _check_budget_exceeded (pure) ===============================
+
+def test_check_budget_exceeded_returns_none_when_under_all_thresholds():
+    assert _check_budget_exceeded(1.0, 100, 0.001, 1) is None
+
+
+def test_check_budget_exceeded_detects_time():
+    assert _check_budget_exceeded(SETTINGS.max_request_seconds + 1, 0, 0.0, 0) == "time"
+
+
+def test_check_budget_exceeded_detects_tokens():
+    assert _check_budget_exceeded(0.0, SETTINGS.max_request_tokens + 1, 0.0, 0) == "tokens"
+
+
+def test_check_budget_exceeded_detects_cost():
+    assert _check_budget_exceeded(0.0, 0, SETTINGS.max_request_cost_usd + 0.01, 0) == "cost"
+
+
+def test_check_budget_exceeded_detects_tool_calls():
+    assert _check_budget_exceeded(0.0, 0, 0.0, SETTINGS.max_tool_calls + 1) == "tool_calls"
+
+
+def test_check_budget_exceeded_reports_first_type_in_fixed_order_when_multiple_exceeded():
+    """Ca time va tokens deu vuot cung luc -> chi anh huong loai nao duoc BAO CAO (thu
+    tu co dinh time -> tokens -> cost -> tool_calls), khong anh huong viec CO dung hay
+    khong (dung ngay khi bat ky 1 loai vuot)."""
+    result = _check_budget_exceeded(
+        SETTINGS.max_request_seconds + 1, SETTINGS.max_request_tokens + 1, 0.0, 0,
+    )
+    assert result == "time"
+
+
+# =============================== Request Budget (Phần 1/3) — run_agent_loop tích hợp ===============================
+
+def test_run_agent_loop_stops_before_first_iteration_when_time_budget_already_exceeded(monkeypatch):
+    """Ngan sach thoi gian da vuot NGAY TU DAU (vd truoc do phien da xu ly qua lau) ->
+    phai dung TRUOC KHI goi LLM lan nao ca (khong co tool call nao thuc hien), roi ve
+    fallback cu (khong co du lieu thanh cong de tong hop) — nhung PHAI phan biet duoc
+    voi truong hop het max_agent_iterations that su qua hit_max_iterations=False +
+    budget_exceeded='time'."""
+    monkeypatch.setattr("agent.loop.SETTINGS.max_request_seconds", -1.0)
+
+    with patch("agent.loop.chat_completion") as mock_chat:
+        result = run_agent_loop([{"role": "user", "content": "Câu hỏi?"}], dataset_manager=MagicMock())
+
+    mock_chat.assert_not_called()
+    assert result["iterations"] == 0
+    assert result["hit_max_iterations"] is False
+    assert result["budget_exceeded"] == "time"
+    assert result["graceful_termination"] is False
+    assert result["trace"] == []
+
+
+def test_run_agent_loop_stops_early_when_tool_calls_budget_exceeded_with_successful_data(monkeypatch):
+    """max_tool_calls=1 nhung 1 lan goi LLM tra ve 2 tool_calls cung luc (xac nhan that
+    o Buoc 0: 1 iteration co the chua NHIEU tool_calls) -> tong total_tool_calls=2>1
+    ngay sau iteration 1 -> phai dung TRUOC iteration 2 (du max_agent_iterations mac
+    dinh la 5), va van tong hop duoc cau tra loi tu du lieu da thanh cong (graceful
+    termination tai su dung dung co che cu)."""
+    monkeypatch.setattr("agent.loop.SETTINGS.max_tool_calls", 1)
+
+    tc1 = _fake_tool_call("call_1", "aggregate_metric", '{"month": 6}')
+    tc2 = _fake_tool_call("call_2", "aggregate_metric", '{"month": 12}')
+    msg1 = _fake_message(tool_calls=[tc1, tc2], content=None)
+    synthesis_msg = _fake_message(tool_calls=None, content="Tổng hợp: tháng 6 là 68.64.")
+
+    responses = [_fake_response(msg1), _fake_response(synthesis_msg)]
+
+    with patch("agent.loop.chat_completion", side_effect=responses), \
+         patch("agent.loop.execute_tool", return_value=success({"result": 68.64})):
+        result = run_agent_loop([{"role": "user", "content": "Câu hỏi?"}], dataset_manager=MagicMock())
+
+    assert result["iterations"] == 1
+    assert result["iterations"] < SETTINGS.max_agent_iterations
+    assert result["hit_max_iterations"] is False
+    assert result["budget_exceeded"] == "tool_calls"
+    assert result["graceful_termination"] is True
+    assert "68.64" in result["answer"]
+    assert len(result["trace"]) == 2
+
+
+def test_run_agent_loop_stops_early_when_cost_budget_exceeded_with_successful_data(monkeypatch):
+    """max_request_cost_usd rat thap -> vuot ngay sau 1 lan goi LLM co usage tokens lon
+    -> dung SOM, van tong hop duoc cau tra loi tu tool call da thanh cong. Dung DUNG
+    calculate_chat_cost() that (khong mock) voi chat_model mac dinh (qwen/qwen3.6-27b,
+    co trong MODEL_PRICING) de xac nhan cong don chi phi dung ham co san, khong viet
+    lai cong thuc rieng. chat_model duoc ep ve model CO trong MODEL_PRICING vi
+    SETTINGS.chat_model thuc te (tu .env, vd ag/gpt-oss-120b-medium) KHONG co trong
+    bang gia -> calculate_chat_cost() se luon tra 0.0, khong the test duoc ngan sach
+    cost bang model that dang chay (han che co san, ngoai pham vi task nay)."""
+    monkeypatch.setattr("agent.loop.SETTINGS.max_request_cost_usd", 0.001)
+    monkeypatch.setattr("agent.loop.SETTINGS.chat_model", "qwen/qwen3.6-27b")
+
+    tc1 = _fake_tool_call("call_1", "aggregate_metric", "{}")
+    msg1 = _fake_message(tool_calls=[tc1], content=None)
+    synthesis_msg = _fake_message(tool_calls=None, content="Kết quả: 42.")
+
+    # usage lon: 1000/1e6*0.30 + 1000/1e6*2.00 = 0.0023 USD > 0.001 threshold
+    responses = [
+        _fake_response(msg1, usage_tokens=(1000, 1000)),
+        _fake_response(synthesis_msg),
+    ]
+
+    with patch("agent.loop.chat_completion", side_effect=responses), \
+         patch("agent.loop.execute_tool", return_value=success({"result": 42})):
+        result = run_agent_loop([{"role": "user", "content": "Câu hỏi?"}], dataset_manager=MagicMock())
+
+    assert result["iterations"] == 1
+    assert result["iterations"] < SETTINGS.max_agent_iterations
+    assert result["hit_max_iterations"] is False
+    assert result["budget_exceeded"] == "cost"
+    assert result["graceful_termination"] is True
+    assert "42" in result["answer"]
+
+
+def test_run_agent_loop_stops_early_when_token_budget_exceeded_before_iteration_cap(monkeypatch):
+    """Kich ban tich hop chinh yeu cau boi task: ngan sach token bi vuot SAU khi da
+    chay 2 iteration THANH CONG (vd tool tra ve du lieu lon o iteration 2) — voi
+    max_agent_iterations mac dinh la 5 (KHONG doi), xac nhan dung SOM HON, KHONG doi
+    het ca 5 iteration."""
+    monkeypatch.setattr("agent.loop.SETTINGS.max_request_tokens", 1500)
+
+    tc1 = _fake_tool_call("call_1", "aggregate_metric", '{"month": 6}')
+    tc2 = _fake_tool_call("call_2", "aggregate_metric", '{"month": 12}')
+    msg1 = _fake_message(tool_calls=[tc1], content=None)
+    msg2 = _fake_message(tool_calls=[tc2], content=None)
+    synthesis_msg = _fake_message(tool_calls=None, content="Tổng hợp: 42.")
+
+    responses = [
+        _fake_response(msg1, usage_tokens=(600, 600)),   # cong don 1200, <=1500, chua vuot
+        _fake_response(msg2, usage_tokens=(600, 600)),   # cong don 2400, >1500, vuot
+        _fake_response(synthesis_msg),
+    ]
+
+    with patch("agent.loop.chat_completion", side_effect=responses), \
+         patch("agent.loop.execute_tool", return_value=success({"result": 42})):
+        result = run_agent_loop([{"role": "user", "content": "Câu hỏi?"}], dataset_manager=MagicMock())
+
+    assert result["iterations"] == 2
+    assert result["iterations"] < SETTINGS.max_agent_iterations
+    assert result["hit_max_iterations"] is False
+    assert result["budget_exceeded"] == "tokens"
+    assert result["graceful_termination"] is True
+    assert "42" in result["answer"]
+    assert len(result["trace"]) == 2
+
+
+def test_run_agent_loop_budget_exceeded_is_none_when_hitting_normal_iteration_cap(monkeypatch):
+    """Doi chung: khi dung do het max_agent_iterations THAT SU (khong budget nao vuot),
+    budget_exceeded phai la None va hit_max_iterations van True — khong duoc lam sai
+    lech hanh vi cu (test nay lap lai kich ban group_006 da co, chi them assertion cho
+    field moi budget_exceeded)."""
+    monkeypatch.setattr("agent.loop.SETTINGS.max_agent_iterations", 2)
+
+    tc1 = _fake_tool_call("call_1", "aggregate_metric", "{}")
+    tc2 = _fake_tool_call("call_2", "aggregate_metric", "{}")
+    msg1 = _fake_message(tool_calls=[tc1], content=None)
+    msg2 = _fake_message(tool_calls=[tc2], content=None)
+    responses = [_fake_response(msg1), _fake_response(msg2)]
+
+    with patch("agent.loop.chat_completion", side_effect=responses), \
+         patch("agent.loop.execute_tool", return_value={"ok": False, "error": "Dataset không tồn tại."}):
+        result = run_agent_loop([{"role": "user", "content": "Câu hỏi?"}], dataset_manager=MagicMock())
+
+    assert result["hit_max_iterations"] is True
+    assert result["budget_exceeded"] is None
+    assert result["graceful_termination"] is False

@@ -1,7 +1,9 @@
 """Agent loop: LLM <-> tool execution, với MAX_ITERATIONS chống vòng lặp vô hạn."""
 import json
 import re
+import time
 from services.openrouter_client import chat_completion
+from services.cost_tracker import calculate_chat_cost
 from agent.tool_schemas import ALL_TOOL_SCHEMAS
 from agent.tool_registry import execute_tool
 from tools.dataset_manager import DatasetManager
@@ -138,6 +140,27 @@ def _call_with_empty_content_retry(messages: list, tools: list[dict]) -> tuple:
         print(f"  [empty-content-retry] Response rỗng/lộ token nội bộ, thử lại ({empty_retries}/{EMPTY_CONTENT_MAX_RETRIES})...")
 
 
+def _check_budget_exceeded(
+    elapsed_seconds: float, total_tokens: int, total_cost_usd: float, total_tool_calls: int,
+) -> str | None:
+    """Request Budget (Phần 1/3) — kiểm tra CẢ 4 loại ngân sách, trả về tên loại đầu
+    tiên vượt ngưỡng ("time"/"tokens"/"cost"/"tool_calls"), hoặc None nếu chưa loại
+    nào vượt. Tách thành hàm THUẦN (pure function, không đụng trace/messages) để unit
+    test dễ giả lập từng trường hợp riêng lẻ mà không cần dựng cả run_agent_loop().
+    Thứ tự kiểm tra cố định (time -> tokens -> cost -> tool_calls) chỉ ảnh hưởng loại
+    nào được BÁO CÁO nếu NHIỀU loại cùng vượt 1 lúc — không ảnh hưởng việc CÓ dừng
+    hay không (dừng ngay khi bất kỳ 1 loại vượt)."""
+    if elapsed_seconds > SETTINGS.max_request_seconds:
+        return "time"
+    if total_tokens > SETTINGS.max_request_tokens:
+        return "tokens"
+    if total_cost_usd > SETTINGS.max_request_cost_usd:
+        return "cost"
+    if total_tool_calls > SETTINGS.max_tool_calls:
+        return "tool_calls"
+    return None
+
+
 def run_agent_loop(messages: list, dataset_manager: DatasetManager) -> dict:
     """
     Chạy vòng lặp agent trên messages (list đã có system + user messages).
@@ -160,6 +183,15 @@ def run_agent_loop(messages: list, dataset_manager: DatasetManager) -> dict:
                                             # phân biệt "hết ngân sách nhưng có trả lời
                                             # thật" với "hết ngân sách, không trả lời
                                             # được gì" (fallback cũ)
+            "budget_exceeded": str | None, # Request Budget (Phần 1/3) — "time"/
+                                            # "tokens"/"cost"/"tool_calls" nếu dừng SỚM
+                                            # (trước khi chạm max_agent_iterations) do
+                                            # vượt 1 trong 4 ngân sách, None nếu không.
+                                            # ĐỘC LẬP với hit_max_iterations — dừng do
+                                            # budget thì hit_max_iterations=False (số
+                                            # iteration THẬT SỰ chưa chạm max), nhưng
+                                            # vẫn đi qua ĐÚNG code path graceful
+                                            # termination (Part A) như khi hết iteration.
         }
     """
     trace = []
@@ -168,7 +200,26 @@ def run_agent_loop(messages: list, dataset_manager: DatasetManager) -> dict:
     max_iter = SETTINGS.max_agent_iterations
     total_empty_retries = 0
 
+    # Request Budget (Phần 1/3) — theo dõi CỘNG DỒN qua TOÀN BỘ lượt hỏi (không phải
+    # riêng từng iteration). start_time dùng time.monotonic() (KHÔNG dùng time.time())
+    # vì không bị ảnh hưởng bởi đồng hồ hệ thống thay đổi giữa chừng (vd NTP sync) —
+    # chỉ cần khoảng cách thời gian, không cần mốc thời gian tuyệt đối.
+    start_time = time.monotonic()
+    total_tokens = 0
+    total_cost_usd = 0.0
+    total_tool_calls = 0
+    budget_exceeded_reason = None
+
     while iteration < max_iter:
+        # Kiểm tra TRƯỚC mỗi iteration MỚI (không phải sau) — đúng yêu cầu: dừng NGAY
+        # trước khi gọi thêm 1 lượt LLM nữa, không đợi iteration "đang xử lý" xong (ở
+        # đây LUÔN là điểm BẮT ĐẦU iteration mới, chưa gọi LLM cho iteration này).
+        budget_exceeded_reason = _check_budget_exceeded(
+            time.monotonic() - start_time, total_tokens, total_cost_usd, total_tool_calls,
+        )
+        if budget_exceeded_reason is not None:
+            break
+
         iteration += 1
         tools_for_this_call = _tools_for_next_call(trace)
         response, message, empty_retries = _call_with_empty_content_retry(messages, tools_for_this_call)
@@ -180,8 +231,15 @@ def run_agent_loop(messages: list, dataset_manager: DatasetManager) -> dict:
                 "input_tokens": response.usage.prompt_tokens,
                 "output_tokens": response.usage.completion_tokens,
             })
+            # Cộng dồn cho Request Budget — dùng ĐÚNG calculate_chat_cost() đã có
+            # (services/cost_tracker.py), KHÔNG viết lại công thức tính giá riêng.
+            total_tokens += response.usage.prompt_tokens + response.usage.completion_tokens
+            total_cost_usd += calculate_chat_cost(
+                SETTINGS.chat_model, response.usage.prompt_tokens, response.usage.completion_tokens,
+            )
 
         if message.tool_calls:
+            total_tool_calls += len(message.tool_calls)
             messages.append(message.model_dump(exclude_unset=True))
 
             for tool_call in message.tool_calls:
@@ -239,6 +297,7 @@ def run_agent_loop(messages: list, dataset_manager: DatasetManager) -> dict:
                     "usage_per_call": usage_per_call,
                     "empty_content_retries": total_empty_retries,
                     "graceful_termination": False,
+                    "budget_exceeded": None,
                 }
             messages.append({"role": "assistant", "content": message.content})
             return {
@@ -249,14 +308,20 @@ def run_agent_loop(messages: list, dataset_manager: DatasetManager) -> dict:
                 "usage_per_call": usage_per_call,
                 "empty_content_retries": total_empty_retries,
                 "graceful_termination": False,
+                "budget_exceeded": None,
             }
 
-    # Het ngan sach max_agent_iterations (khong doi so nay). TRUOC KHI tra cau xin loi
-    # co dinh (vut bo toan bo cong da lam — dung bug that quan sat o group_006), kiem
-    # tra: da co it nhat 1 tool call THANH CONG voi du lieu that chua? Neu co, thu tong
-    # hop cau tra loi tu du lieu do bang 1 lan goi LLM CUOI CUNG, NGOAI ngan sach
-    # max_agent_iterations (khong lam vong lap chinh chay them buoc nao) — xem
-    # FINAL_SYNTHESIS_PROMPT o tren.
+    # Ra khoi while do 1 trong 2 ly do: (a) het ngan sach max_agent_iterations (vong
+    # lap chay het dieu kien, budget_exceeded_reason con None vi lan kiem tra cuoi da
+    # qua), hoac (b) Request Budget (Phan 1/3) vuot 1 trong 4 loai NGAY TRUOC 1
+    # iteration moi (break, budget_exceeded_reason da duoc gan). CA HAI truong hop deu
+    # di qua CHUNG 1 co che graceful termination ben duoi (khong viet fallback rieng
+    # cho budget) — chi khac o gia tri hit_max_iterations/budget_exceeded tra ve cuoi
+    # cung. TRUOC KHI tra cau xin loi co dinh (vut bo toan bo cong da lam — dung bug
+    # that quan sat o group_006), kiem tra: da co it nhat 1 tool call THANH CONG voi du
+    # lieu that chua? Neu co, thu tong hop cau tra loi tu du lieu do bang 1 lan goi LLM
+    # CUOI CUNG, NGOAI ngan sach max_agent_iterations (khong lam vong lap chinh chay
+    # them buoc nao) — xem FINAL_SYNTHESIS_PROMPT o tren.
     has_successful_tool_call = any(t["result"]["ok"] for t in trace)
     if has_successful_tool_call:
         messages.append({"role": "user", "content": FINAL_SYNTHESIS_PROMPT})
@@ -291,10 +356,11 @@ def run_agent_loop(messages: list, dataset_manager: DatasetManager) -> dict:
                 "answer": synthesis_content,
                 "trace": trace,
                 "iterations": iteration,
-                "hit_max_iterations": True,
+                "hit_max_iterations": budget_exceeded_reason is None,
                 "usage_per_call": usage_per_call,
                 "empty_content_retries": total_empty_retries,
                 "graceful_termination": True,
+                "budget_exceeded": budget_exceeded_reason,
             }
         # Tong hop that bai (content rong/leaked/exception) -> bo FINAL_SYNTHESIS_PROMPT
         # vua them, khong de rac trong lich su hoi thoai, dung fallback cu ben duoi.
@@ -306,8 +372,9 @@ def run_agent_loop(messages: list, dataset_manager: DatasetManager) -> dict:
         "answer": fallback_answer,
         "trace": trace,
         "iterations": iteration,
-        "hit_max_iterations": True,
+        "hit_max_iterations": budget_exceeded_reason is None,
         "usage_per_call": usage_per_call,
         "empty_content_retries": total_empty_retries,
         "graceful_termination": False,
+        "budget_exceeded": budget_exceeded_reason,
     }
