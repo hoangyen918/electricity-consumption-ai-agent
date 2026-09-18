@@ -23,6 +23,7 @@ from agent.turbine_tool_wrappers import (
     predict_power_for_agent,
 )
 from agent.agent import Agent
+from agent.loop import EMPTY_CONTENT_FALLBACK_ANSWER, MAX_ITERATIONS_FALLBACK_PREFIX
 from config.settings import SETTINGS
 from rag.vector_store import count_documents, get_collection
 from rag.retriever import SCORE_THRESHOLD, retrieve
@@ -486,7 +487,16 @@ def _classify_answerability(answer: str) -> str:
     """
     Heuristic đơn giản, tái sử dụng REFUSAL_PATTERNS đã có trong evals/run_evals.py
     (không viết lại logic từ chối mới).
-    """
+
+    Kiểm tra fallback HẠ TẦNG (agent/loop.py) TRƯỚC refusal pattern — cả 2 chuỗi
+    fallback cố định đều bắt đầu bằng "Xin lỗi", trùng với 1 pattern trong
+    REFUSAL_PATTERNS ("xin lỗi"), nên bị hiểu NHẦM thành "Từ chối" (từ chối có suy
+    luận thật) dù bản chất là lỗi hạ tầng (model/proxy lộ token nội bộ, hoặc hết ngân
+    sách iteration) — đã xác nhận qua điều tra thật (2026-09-18, câu hỏi "GDP Việt Nam
+    2023"): answer_preview trong agent_trace.jsonl là EMPTY_CONTENT_FALLBACK_ANSWER,
+    hiển thị sai thành "Từ chối" trước khi sửa."""
+    if answer == EMPTY_CONTENT_FALLBACK_ANSWER or answer.startswith(MAX_ITERATIONS_FALLBACK_PREFIX):
+        return "⚠️ Lỗi hạ tầng"
     answer_lower = answer.lower()
     if any(re.search(p, answer_lower) for p in REFUSAL_PATTERNS):
         return "Từ chối"
@@ -2318,6 +2328,28 @@ def render_wind_turbine_dashboard():
         _render_kb_explorer_tab()
 
 
+def _bridge_wind_turbine_datasets_to_chat() -> None:
+    """Cầu nối CHIỀU NGƯỢC (Dashboard -> Chat) — đối xứng với cầu nối đã có sẵn
+    (Chat -> Dashboard, xem _available_turbine_datasets()/_ensure_wind_turbine_
+    dataset_loaded()). Đã xác nhận THẬT (điều tra 2026-09-18): mở Dashboard trước
+    (1 tab tự lazy-load WT1-4/GT1 vào wind_turbine_manager) rồi chuyển sang Chat hỏi
+    về dữ liệu đó sẽ bị báo "chỉ có Tetouan" — wind_turbine_manager và dataset_manager
+    là 2 INSTANCE TÁCH RIÊNG (xem _get_wind_turbine_manager()), không tự động đồng bộ.
+
+    CHỈ bắc cầu dataset CÓ trong wind_turbine_manager MÀ dataset_manager còn THIẾU
+    (theo tên) — KHÔNG bắc cầu lại dataset đã có (tránh ghi đè/làm việc thừa mỗi lượt
+    chat nếu đã bắc cầu xong từ lượt trước). Gọi ĐÚNG add_dataframe() đã có sẵn (dùng
+    Y HỆT cơ chế Chat -> Dashboard), KHÔNG viết logic bắc cầu mới."""
+    wind_turbine_manager = st.session_state.get("wind_turbine_manager")
+    if wind_turbine_manager is None:
+        return
+    chat_manager = st.session_state.dataset_manager
+    existing_names = set(chat_manager.list_datasets())
+    for name in wind_turbine_manager.list_datasets():
+        if name not in existing_names:
+            chat_manager.add_dataframe(wind_turbine_manager.get_dataframe(name), name=name)
+
+
 def render_chat():
     st.title("⚡ Electricity Consumption AI Agent")
     st.caption("Hỏi bằng tiếng Việt về dữ liệu tiêu thụ điện hoặc tra cứu tài liệu EVN.")
@@ -2349,6 +2381,7 @@ def render_chat():
             else:
                 with st.spinner("Đang xử lý..."):
                     try:
+                        _bridge_wind_turbine_datasets_to_chat()
                         result = st.session_state.agent.ask(question)
                         st.session_state.session_total_cost_usd += result["estimated_cost_usd"]
                         st.write(result["answer"])
