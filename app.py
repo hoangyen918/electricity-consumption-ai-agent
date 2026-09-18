@@ -2,6 +2,7 @@
 import json
 import re
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -10,7 +11,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from tools.dataset_manager import DatasetManager
+from tools.dataset_manager import DatasetManager, _detect_delimiter, derive_time_columns
 from tools.data_cleaning_tools import clean_missing_values, detect_duplicates
 from tools.turbine_diagnostic_tools import (
     diagnose_theoretical_power_deviation, OPST_LABELS, calculate_turbine_kpis,
@@ -309,6 +310,17 @@ def render_sidebar():
                     "hơn 1 dataset đang tải) — thường sẽ báo lỗi rõ ràng, không âm thầm "
                     "trả số sai."
                 )
+        # CHỈ hiện nút ở Dashboard mode (đối xứng với khối "Câu hỏi mẫu" chỉ hiện ở Chat
+        # mode ngay trên) — cho phép hỏi nhanh mà không cần rời khỏi tab Dashboard đang
+        # xem. Ở đây CHỈ đặt cờ show_floating_chat=True khi bấm nút — việc THỰC SỰ gọi
+        # _render_floating_chat_dialog() nằm ở CUỐI main() (chạy SAU nhánh if/else theo
+        # mode, ĐỘC LẬP với mode, KHÔNG đặt trong nhánh Dashboard ở đây) — xem comment
+        # chi tiết tại main() lý do: submit st.chat_input bên trong dialog làm rerun đó
+        # đọc NHẦM view_mode về mặc định "💬 Chat", nên không thể dựa vào view_mode để
+        # quyết định có gọi lại dialog hay không.
+        elif st.session_state.get("view_mode") == "📊 Wind Turbine Dashboard":
+            if st.button("💬 Hỏi nhanh", width="stretch"):
+                st.session_state.show_floating_chat = True
 
         st.divider()
 
@@ -2351,6 +2363,34 @@ def _question_mentions_turbine(question: str) -> bool:
     return any(keyword in question_lower for keyword in TURBINE_QUESTION_KEYWORDS)
 
 
+def _load_one_fixed_dataset(name: str, path: str) -> tuple[str, pd.DataFrame | None, str | None, str | None]:
+    """Đọc + derive_time_columns() 1 file turbine cố định — chạy trong thread riêng
+    (xem ThreadPoolExecutor ở _bridge_wind_turbine_datasets_to_chat()). pandas.read_csv
+    là I/O-bound (giải phóng GIL khi chờ đĩa) nên chạy song song qua threading thực sự
+    tăng tốc — KHÁC với các bước TÍNH TOÁN CPU-bound (classify_turbine_status, estimate_
+    power_curve...), threading KHÔNG áp dụng ở đó, không đụng gì tới các bước đó.
+
+    Gộp CẢ derive_time_columns() vào đây (không để lại main thread sau khi gộp kết quả)
+    — đã đo THẬT (điều tra 2026-09-18): derive_time_columns() chiếm ~5.8s/10.9s tổng
+    thời gian nạp 5 file (hơn một nửa), nếu để lại main thread sẽ mất phần lớn lợi ích
+    song song hóa (vẫn phải chạy tuần tự ~5.8s dù phần đọc file đã song song xong).
+
+    KHÔNG gọi bất kỳ hàm st.* nào ở đây (st.spinner/st.error không an toàn ngoài
+    ScriptRunContext của luồng chính Streamlit) và KHÔNG ghi vào DatasetManager ở đây
+    (nhiều thread cùng ghi 1 dict Python không đảm bảo an toàn tuyệt đối) — chỉ trả kết
+    quả thô, caller ghi vào manager ở main thread SAU KHI as_completed() xác nhận xong.
+
+    Trả về error message (thay vì raise) nếu đọc/parse lỗi — lỗi 1 file KHÔNG làm hỏng
+    cả batch, các future khác trong ThreadPoolExecutor vẫn hoàn tất bình thường."""
+    try:
+        delimiter = _detect_delimiter(path)
+        df = pd.read_csv(path, sep=delimiter, encoding="utf-8-sig")
+        df, source_column = derive_time_columns(df)
+        return name, df, source_column, None
+    except Exception as exc:
+        return name, None, None, str(exc)
+
+
 def _bridge_wind_turbine_datasets_to_chat(question: str) -> None:
     """Cầu nối CHIỀU NGƯỢC (Dashboard -> Chat) — đối xứng với cầu nối đã có sẵn
     (Chat -> Dashboard, xem _available_turbine_datasets()/_ensure_wind_turbine_
@@ -2372,8 +2412,11 @@ def _bridge_wind_turbine_datasets_to_chat(question: str) -> None:
     kịp nạp MỘT PHẦN 5 file cố định trước khi user bấm chuyển sang Chat (Streamlit HỦY
     script run của tab Dashboard giữa chừng — không phải bug ở bridge, bug ở chỗ
     wind_turbine_manager không kịp có dữ liệu) — nạp TRỰC TIẾP các file cố định CÒN
-    THIẾU từ đĩa vào dataset_manager, dùng ĐÚNG _ensure_wind_turbine_dataset_loaded()
-    đã có (load_csv qua WIND_TURBINE_DATASET_PATHS), KHÔNG viết lại logic nạp file.
+    THIẾU từ đĩa vào dataset_manager. SONG SONG HÓA (2026-09, đo THẬT ~10.9s tuần tự
+    trước đây) qua ThreadPoolExecutor — mỗi file đọc trong 1 thread riêng
+    (_load_one_fixed_dataset(), I/O-bound nên threading thực sự giúp), CHỈ ghi kết quả
+    vào chat_manager ở MAIN THREAD sau khi từng future hoàn tất (as_completed) — tránh
+    nhiều thread cùng ghi 1 dict. Lỗi 1 file (corrupt/mất) không làm hỏng các file khác.
     Tự bỏ qua (không làm gì) nếu file đã có trong dataset_manager từ trước — không tốn
     thêm chi phí ở các lượt chat sau khi đã nạp đủ."""
     if not _question_mentions_turbine(question):
@@ -2389,9 +2432,117 @@ def _bridge_wind_turbine_datasets_to_chat(question: str) -> None:
                 chat_manager.add_dataframe(wind_turbine_manager.get_dataframe(name), name=name)
                 existing_names.add(name)
 
+    to_load = []
     for key in WIND_TURBINE_DATASET_PATHS:
-        if key not in existing_names:
-            _ensure_wind_turbine_dataset_loaded(chat_manager, key)
+        if key in existing_names:
+            continue
+        path = Path(WIND_TURBINE_DATASET_PATHS[key])
+        if not path.exists():
+            st.error(
+                f"Không tìm thấy file `{path}`. 5 file turbine gió không được git-track "
+                "(xem .gitignore) — cần tự copy vào đúng thư mục `data/wind_turbine/`."
+            )
+            continue
+        to_load.append((key, str(path)))
+
+    if not to_load:
+        return
+
+    paths_by_name = dict(to_load)
+    with st.spinner(f"Đang nạp song song {len(to_load)} file turbine..."):
+        with ThreadPoolExecutor(max_workers=len(to_load)) as executor:
+            futures = [executor.submit(_load_one_fixed_dataset, name, path) for name, path in to_load]
+            for future in as_completed(futures):
+                name, df, source_column, error = future.result()
+                if error is not None:
+                    st.error(f"Lỗi khi nạp dataset '{name}': {error}")
+                    continue
+                chat_manager.add_preloaded_dataframe(
+                    df, name, source_column, source_path=paths_by_name[name],
+                )
+
+
+def _handle_chat_question(question: str) -> None:
+    """Xử lý 1 câu hỏi chat — TÁI DÙNG bởi cả render_chat() (Chat mode) và dialog chat
+    nổi (_render_floating_chat_dialog(), Dashboard mode). Đọc/ghi ĐÚNG 1 nguồn lịch sử
+    chung st.session_state.chat_history — KHÔNG có lịch sử riêng cho dialog, để chuyển
+    qua lại giữa Chat mode và chat nổi không mất câu hỏi đã hỏi ở phía còn lại. Logic
+    NGUYÊN VẸN từ render_chat() trước khi tách hàm này (chat nổi, 2026-09) — không đổi
+    hành vi, chỉ đổi chỗ gọi."""
+    st.session_state.chat_history.append({"role": "user", "content": question})
+    with st.chat_message("user"):
+        st.write(question)
+
+    with st.chat_message("assistant"):
+        if not st.session_state.dataset_loaded:
+            answer = "Chưa có dataset nào được tải. Vui lòng upload file CSV/Excel ở sidebar trước."
+            st.write(answer)
+            st.session_state.chat_history.append({"role": "assistant", "content": answer})
+        else:
+            with st.spinner("Đang xử lý..."):
+                try:
+                    _bridge_wind_turbine_datasets_to_chat(question)
+                    result = st.session_state.agent.ask(question)
+                    st.session_state.session_total_cost_usd += result["estimated_cost_usd"]
+                    st.write(result["answer"])
+                    trace_info = {
+                        "iterations": result["iterations"],
+                        "latency_ms": result["latency_ms"],
+                        "estimated_cost_usd": result["estimated_cost_usd"],
+                        "trace": result["trace"],
+                        "usage_per_call": result["usage_per_call"],
+                        "answer": result["answer"],
+                        "question": question,
+                    }
+                    # msg_id = index NÓ sẽ có trong chat_history sau khi append bên dưới
+                    # (user message đã append, len hiện tại == index tương lai của assistant)
+                    render_trace_expander(trace_info, len(st.session_state.chat_history))
+                    st.session_state.chat_history.append({
+                        "role": "assistant",
+                        "content": result["answer"],
+                        "trace_info": trace_info,
+                    })
+                except Exception as e:
+                    error_msg = f"Đã xảy ra lỗi khi xử lý câu hỏi: {e}"
+                    st.error(error_msg)
+                    st.session_state.chat_history.append(
+                        {"role": "assistant", "content": error_msg}
+                    )
+
+
+def _close_floating_chat() -> None:
+    """on_dismiss callback (nút X / Esc / bấm ra ngoài dialog) — reset cờ show_floating_
+    chat để dialog KHÔNG tự mở lại ở lần rerun tiếp theo (xem lý do cần cờ này ở comment
+    main())."""
+    st.session_state.show_floating_chat = False
+
+
+@st.dialog(
+    "💬 Hỏi nhanh (dùng chung lịch sử với Chat mode)", width="large", on_dismiss=_close_floating_chat,
+)
+def _render_floating_chat_dialog() -> None:
+    """Chat nổi cho Dashboard mode (13 tab) — TÁI DÙNG 100% st.session_state.chat_history
+    + _handle_chat_question() của Chat mode, KHÔNG viết logic gọi agent/lịch sử riêng.
+    Chỉ hiển thị 10 tin nhắn GẦN NHẤT (tránh dialog quá dài) — lịch sử ĐẦY ĐỦ vẫn nằm
+    nguyên trong st.session_state.chat_history, xem đủ khi chuyển sang Chat mode.
+
+    Hàm này được gọi ở main() (KHÔNG phải render_sidebar()) — xem comment ở main() để
+    biết lý do: submit st.chat_input bên trong dialog gây ra 1 quirk thật của Streamlit
+    khiến rerun đó đọc nhầm view_mode về mặc định, nên việc gọi lại dialog không thể phụ
+    thuộc vào nhánh mode nào đang chạy."""
+    if not st.session_state.chat_history:
+        st.caption("Chưa có câu hỏi nào — hỏi ngay bên dưới.")
+    for msg in st.session_state.chat_history[-10:]:
+        with st.chat_message(msg["role"]):
+            st.write(msg["content"])
+
+    question = st.chat_input("Hỏi về dữ liệu đang xem...")
+    if question:
+        # KHONG can goi them st.rerun() — _handle_chat_question() da TU render inline
+        # (st.write()) trong CHINH lan chay nay, giong render_chat() (ngoai dialog) dang
+        # lam; lan goi lai dialog o rerun tiep theo da duoc dam bao boi cho show_floating_
+        # chat kiem tra o main(), khong phu thuoc ham nay tu goi rerun.
+        _handle_chat_question(question)
 
 
 def render_chat():
@@ -2413,45 +2564,7 @@ def render_chat():
     if not question and "pending_question" in st.session_state:
         question = st.session_state.pop("pending_question")
     if question:
-        st.session_state.chat_history.append({"role": "user", "content": question})
-        with st.chat_message("user"):
-            st.write(question)
-
-        with st.chat_message("assistant"):
-            if not st.session_state.dataset_loaded:
-                answer = "Chưa có dataset nào được tải. Vui lòng upload file CSV/Excel ở sidebar trước."
-                st.write(answer)
-                st.session_state.chat_history.append({"role": "assistant", "content": answer})
-            else:
-                with st.spinner("Đang xử lý..."):
-                    try:
-                        _bridge_wind_turbine_datasets_to_chat(question)
-                        result = st.session_state.agent.ask(question)
-                        st.session_state.session_total_cost_usd += result["estimated_cost_usd"]
-                        st.write(result["answer"])
-                        trace_info = {
-                            "iterations": result["iterations"],
-                            "latency_ms": result["latency_ms"],
-                            "estimated_cost_usd": result["estimated_cost_usd"],
-                            "trace": result["trace"],
-                            "usage_per_call": result["usage_per_call"],
-                            "answer": result["answer"],
-                            "question": question,
-                        }
-                        # msg_id = index NÓ sẽ có trong chat_history sau khi append bên dưới
-                        # (user message đã append, len hiện tại == index tương lai của assistant)
-                        render_trace_expander(trace_info, len(st.session_state.chat_history))
-                        st.session_state.chat_history.append({
-                            "role": "assistant",
-                            "content": result["answer"],
-                            "trace_info": trace_info,
-                        })
-                    except Exception as e:
-                        error_msg = f"Đã xảy ra lỗi khi xử lý câu hỏi: {e}"
-                        st.error(error_msg)
-                        st.session_state.chat_history.append(
-                            {"role": "assistant", "content": error_msg}
-                        )
+        _handle_chat_question(question)
 
 
 def main():
@@ -2471,6 +2584,22 @@ def main():
         # an toan vi chat_input (trong render_chat()) khong bi long vao tabs.
         render_sidebar()
         render_wind_turbine_dashboard()
+
+    # QUAN TRỌNG — đã xác nhận THẬT qua browser (2026-09-18, debug print tạm đã gỡ):
+    # khi submit st.chat_input BÊN TRONG _render_floating_chat_dialog() (st.dialog), lần
+    # rerun do đó gây ra khiến st.sidebar.radio(key="view_mode") ĐỌC LẠI RA GIÁ TRỊ MẶC
+    # ĐỊNH ("💬 Chat") thay vì giá trị "📊 Wind Turbine Dashboard" đã chọn trước đó — một
+    # quirk thật của Streamlit (rerun bắt nguồn từ widget bên trong dialog không giữ đúng
+    # trạng thái widget bên ngoài dialog). Hậu quả: nếu chỉ gọi _render_floating_chat_
+    # dialog() trong nhánh "else" (Dashboard mode) như dự định ban đầu, dialog sẽ KHÔNG
+    # được gọi lại đúng lúc cần xử lý câu hỏi vừa gõ, câu hỏi bị mất. Vì vậy kiểm tra cờ
+    # show_floating_chat ở đây, SAU/ĐỘC LẬP với nhánh mode, KHÔNG phụ thuộc view_mode đọc
+    # đúng hay không. Đặt ở CUỐI main() (sau khi mọi widget khác — kể cả st.tabs() trong
+    # render_wind_turbine_dashboard() — đã render xong theo đúng thứ tự bình thường của
+    # chúng) thay vì đầu, để tránh xáo trộn thứ tự gọi của các widget không có key riêng
+    # (vd st.tabs()) — đặt trước đó từng gây tab bị reset về tab đầu tiên.
+    if st.session_state.get("show_floating_chat"):
+        _render_floating_chat_dialog()
 
 
 if __name__ == "__main__":
