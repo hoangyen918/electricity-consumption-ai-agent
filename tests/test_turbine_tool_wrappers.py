@@ -4,6 +4,7 @@ import pandas as pd
 import pytest
 
 from tools.dataset_manager import DatasetManager
+from tools.turbine_diagnostic_tools import detect_physical_violations, CLASSIFICATION_LABELS
 from agent.turbine_tool_wrappers import (
     resolve_power_wind_columns,
     get_or_compute_power_curve,
@@ -12,6 +13,7 @@ from agent.turbine_tool_wrappers import (
     classify_turbine_status_for_agent,
     group_anomaly_windows_for_agent,
     predict_power_for_agent,
+    analyze_turbine_period,
     TURBINE_DEFAULT_BIN_WIDTH,
     MAX_WINDOWS_FOR_AGENT,
 )
@@ -214,3 +216,144 @@ def test_group_anomaly_windows_date_filter_invalid_format_fails_gracefully():
         CURTAILMENT_EXCLUDE_LABELS, start_date="khong-phai-ngay-hop-le",
     )
     assert result["ok"] is False
+
+
+# ======================= analyze_turbine_period() =======================
+# Dieu tra "3/143 graceful_termination" (2026-09): group_anomaly_windows tra 194 window
+# tho (~7.2K token) o iteration cuoi ngay truoc synthesis tren GT1 thang 2/2024 — dung
+# CHINH khoang thoi gian nay lam test case chinh cho consistency + ngan sach kich thuoc.
+
+def test_analyze_turbine_period_consistent_with_individual_tools_on_gt1_feb_2024():
+    """Test QUAN TRONG NHAT: tren GT1 thang 2/2024, MOI con so cua analyze_turbine_period
+    PHAI khop CHINH XAC voi goi rieng tung tool goc cung tham so — dung day la bang
+    chung correctness duy nhat (khong chi 'chay khong loi')."""
+    m = DatasetManager()
+    m.load_csv(GT1_PATH_REAL, name="GT1")
+
+    result = analyze_turbine_period(m, "GT1", start_date="2024-02-01", end_date="2024-02-29", top_n=10)
+    assert result["ok"] is True
+    data = result["data"]
+
+    # --- physical_violations_whole_dataset: khop detect_physical_violations() goc
+    # (toan bo dataset, ham nay KHONG ho tro loc theo ngay — xem site_notes) ---
+    violations_direct = detect_physical_violations(m, dataset_name="GT1")
+    assert violations_direct["ok"] is True
+    for rule_name, info in violations_direct["data"]["rules"].items():
+        if info.get("applicable"):
+            assert data["physical_violations_whole_dataset"][rule_name]["count"] == info["count"]
+            assert data["physical_violations_whole_dataset"][rule_name]["pct"] == info["pct"]
+    assert any("physical_violations_whole_dataset tính trên TOÀN BỘ dataset" in n for n in data["site_notes"])
+
+    # --- status_distribution: khop classification (get_or_compute_classification, CUNG
+    # tham so) loc theo period THEO DUNG CACH analyze_turbine_period tu lam ---
+    power_col, wind_col, err = resolve_power_wind_columns(m, "GT1", None, None)
+    assert err is None
+    classification_direct = get_or_compute_classification(
+        m, "GT1", power_col, wind_col, "GT1.SP.ActualSPP", TURBINE_DEFAULT_BIN_WIDTH,
+    )
+    assert classification_direct["ok"] is True
+    df = m.get_dataframe("GT1")
+    mask = (df["datetime"] >= pd.Timestamp("2024-02-01")) & (df["datetime"] < pd.Timestamp("2024-03-01"))
+    period_index = set(df[mask].index)
+    expected_counts: dict[str, int] = {}
+    for idx, label in classification_direct["data"]["classification"].items():
+        if idx in period_index:
+            expected_counts[label] = expected_counts.get(label, 0) + 1
+    for label in CLASSIFICATION_LABELS:
+        assert data["status_distribution"][label]["count"] == expected_counts.get(label, 0), label
+
+    # --- anomaly_windows: khop group_anomaly_windows_for_agent() goc, CUNG tham so
+    # (min_consecutive_points=3, exclude_labels=["Normal"]) analyze_turbine_period dung ---
+    windows_direct = group_anomaly_windows_for_agent(
+        m, "GT1", "datetime", None, None, "GT1.SP.ActualSPP", TURBINE_DEFAULT_BIN_WIDTH, 3, ["Normal"],
+        start_date="2024-02-01", end_date="2024-02-29",
+    )
+    assert windows_direct["ok"] is True
+    assert data["anomaly_windows"]["total_windows"] == windows_direct["data"]["windows_total_found"]
+    # 198 = so that do TRUC TIEP voi bin_width=TURBINE_DEFAULT_BIN_WIDTH=1.0 (dung tham
+    # so THAT SU analyze_turbine_period() dung). Khac 194 da do o dieu tra truoc do
+    # (script dieu tra dung bin_width=2.0 tam thoi, khong phai bug — bin_width khac nhau
+    # anh huong ngưỡng phan loai Under/Over Production nen so window khac theo). Assertion
+    # nay chu yeu de xac nhan con so "khong tam thuong" (khong phai 0/rong), khong phai
+    # nguon correctness chinh (dong tren da lam viec do qua windows_total_found ==
+    # windows_direct["data"]["windows_total_found"]).
+    assert data["anomaly_windows"]["total_windows"] == 198
+
+    expected_by_label: dict[str, int] = {}
+    for w in windows_direct["data"]["windows"]:
+        expected_by_label[w["label"]] = expected_by_label.get(w["label"], 0) + 1
+    assert data["anomaly_windows"]["count_by_label"] == expected_by_label
+
+    expected_top = sorted(
+        windows_direct["data"]["windows"],
+        key=lambda w: pd.Timedelta(w["duration"]).total_seconds(), reverse=True,
+    )[:10]
+    assert [w["duration"] for w in data["anomaly_windows"]["top_windows"]] == [w["duration"] for w in expected_top]
+    assert [w["start_time"] for w in data["anomaly_windows"]["top_windows"]] == [w["start_time"] for w in expected_top]
+
+
+def test_analyze_turbine_period_output_size_budget_gt1_feb_2024():
+    """Ngan sach: payload JSON < 6.000 ky tu (~1.500 token) tren GT1 thang 2/2024 — so
+    voi group_anomaly_windows THO ~28.874 ky tu (~7.218 token) da do that truoc do."""
+    m = DatasetManager()
+    m.load_csv(GT1_PATH_REAL, name="GT1")
+    result = analyze_turbine_period(m, "GT1", start_date="2024-02-01", end_date="2024-02-29", top_n=10)
+    assert result["ok"] is True
+    import json
+    payload = json.dumps(result, ensure_ascii=False, default=str)
+    assert len(payload) < 6_000, f"Payload qua lon: {len(payload)} ky tu (ngan sach 6.000)"
+
+
+def test_analyze_turbine_period_end_date_is_inclusive():
+    """end_date bao gom CA ngay cuoi (loi lich su da tung xay ra neu quen +1 ngay) —
+    goi CHI 1 ngay 29/2/2024 (ngay nhuan, ngay cuoi thang) phai co du lieu."""
+    m = DatasetManager()
+    m.load_csv(GT1_PATH_REAL, name="GT1")
+    result = analyze_turbine_period(m, "GT1", start_date="2024-02-29", end_date="2024-02-29", top_n=5)
+    assert result["ok"] is True
+    assert result["data"]["period"]["row_count"] > 0
+    actual_end = pd.Timestamp(result["data"]["period"]["actual_end"])
+    assert actual_end.date() == pd.Timestamp("2024-02-29").date()
+
+
+def test_analyze_turbine_period_site2_no_setpoint_does_not_crash_and_has_site_notes():
+    """Site 2 (WT1) khong co setpoint dang tin cay — khong crash, co site_notes giai
+    thich, va Curtailment/Partial Curtailment LUON = 0 (dung nhu classify_turbine_status
+    da thiet ke — 2 nhan nay khong bao gio duoc gan o Site 2)."""
+    m = DatasetManager()
+    m.load_csv(WT1_PATH_REAL, name="WT1")
+    result = analyze_turbine_period(m, "WT1", start_date="2013-01-01", end_date="2013-01-31", top_n=5)
+    assert result["ok"] is True
+    assert any("Site 2" in note and "setpoint" in note for note in result["data"]["site_notes"])
+    assert result["data"]["status_distribution"]["Curtailment"]["count"] == 0
+    assert result["data"]["status_distribution"]["Partial Curtailment"]["count"] == 0
+
+
+def test_analyze_turbine_period_no_data_in_range_returns_failure():
+    """Khoang thoi gian khong co du lieu (ngoai pham vi dataset that) -> failure() voi
+    thong bao ro, KHONG raise/crash."""
+    m = DatasetManager()
+    m.load_csv(GT1_PATH_REAL, name="GT1")
+    result = analyze_turbine_period(m, "GT1", start_date="2030-01-01", end_date="2030-01-31")
+    assert result["ok"] is False
+    assert "không có dữ liệu" in result["error"].lower() or "không có dòng dữ liệu" in result["error"].lower()
+
+
+def test_analyze_turbine_period_dataset_not_found_returns_failure():
+    m = DatasetManager()
+    m.load_csv(GT1_PATH_REAL, name="GT1")
+    result = analyze_turbine_period(m, "khong-ton-tai")
+    assert result["ok"] is False
+    assert "không tồn tại" in result["error"]
+
+
+def test_analyze_turbine_period_no_date_filter_analyzes_whole_dataset():
+    """Khong truyen start_date/end_date -> phan tich TOAN BO dataset, khong loi, khong
+    can date_range_applied dac biet."""
+    m = DatasetManager()
+    m.load_csv(GT1_PATH_REAL, name="GT1")
+    result = analyze_turbine_period(m, "GT1", top_n=5)
+    assert result["ok"] is True
+    assert result["data"]["period"]["start_date_requested"] is None
+    assert result["data"]["period"]["end_date_requested"] is None
+    assert result["data"]["period"]["row_count"] == len(m.get_dataframe("GT1"))

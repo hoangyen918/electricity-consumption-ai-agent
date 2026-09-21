@@ -34,6 +34,8 @@ from tools.turbine_diagnostic_tools import (
     detect_anomalies_ml,
     predict_power,
     calculate_turbine_kpis,
+    detect_physical_violations,
+    CLASSIFICATION_LABELS,
 )
 
 # Dùng bin_width=1.0 làm mặc định cho LLM (KHÁC mặc định nội bộ của estimate_power_curve()
@@ -341,3 +343,198 @@ def calculate_turbine_kpis_for_agent(
         theoretical_power_column=theoretical_power_column,
         interval_minutes=interval_minutes,
     )
+
+
+def _filter_df_by_date_range(
+    df: pd.DataFrame, timestamp_column: str, start_date: str | None, end_date: str | None,
+) -> tuple[pd.DataFrame | None, dict, str | None]:
+    """Lọc df theo [start_date, end_date] — TÁI DÙNG ĐÚNG convention đã có ở
+    tools/dataframe_tools.py::aggregate_metric()/compare_periods() (end_date +1 ngày,
+    so sánh <, KHÔNG phải <=, để bao gồm TRỌN ngày cuối — lỗi lịch sử đã từng xảy ra
+    nếu quên +1 ngày), KHÔNG tự nghĩ convention khác. Trả về
+    (df đã lọc hoặc None nếu lỗi, date_range_applied, error_message hoặc None)."""
+    date_range_applied = {"start_date": start_date, "end_date": end_date}
+    filtered = df
+    if start_date is not None or end_date is not None:
+        if timestamp_column not in df.columns:
+            return None, date_range_applied, f"Dataset has no '{timestamp_column}' column; cannot filter by date."
+        if start_date is not None:
+            try:
+                start_ts = pd.to_datetime(start_date)
+            except (ValueError, TypeError):
+                return None, date_range_applied, f"Invalid start_date format: '{start_date}'"
+            filtered = filtered[filtered[timestamp_column] >= start_ts]
+        if end_date is not None:
+            try:
+                end_ts = pd.to_datetime(end_date) + pd.Timedelta(days=1)
+            except (ValueError, TypeError):
+                return None, date_range_applied, f"Invalid end_date format: '{end_date}'"
+            filtered = filtered[filtered[timestamp_column] < end_ts]
+    return filtered, date_range_applied, None
+
+
+def _window_duration_seconds(window: dict) -> float:
+    """duration là string kiểu "X days HH:MM:SS" từ str(pd.Timedelta) — GIỐNG hệt cách
+    group_anomaly_windows_for_agent() tự parse lại để sắp xếp khi cần cắt bớt (hàm
+    nested riêng ở đó, không export được nên viết lại 3 dòng tương đương ở đây, KHÔNG
+    phải rule chẩn đoán mới — chỉ parse chuỗi thời lượng có sẵn)."""
+    try:
+        return pd.Timedelta(window["duration"]).total_seconds()
+    except Exception:
+        return 0.0
+
+
+def analyze_turbine_period(
+    dataset_manager: DatasetManager, dataset_name: str | None = None,
+    start_date: str | None = None, end_date: str | None = None, top_n: int = 10,
+) -> dict:
+    """Pipeline CỐ ĐỊNH cho câu hỏi mở kiểu "kỳ X có gì bất thường" — chạy CẢ 3 bước
+    chẩn đoán turbine (physical violations, status classification, anomaly windows)
+    trong 1 lần gọi, trả về TÓM TẮT GỌN (đo thật GT1 tháng 2/2024: group_anomaly_windows
+    thô trả 194 window ~7.2K token — tool này nén còn ~1.5K token) thay vì bắt LLM tự
+    gọi 5+ tool riêng lẻ rồi tự tổng hợp (nguyên nhân trực tiếp khiến context phình to
+    ngay trước synthesis, xem điều tra "3/143 graceful_termination" 2026-09).
+
+    CHỈ GỌI LẠI các hàm CÓ SẴN, KHÔNG viết lại bất kỳ rule chẩn đoán nào:
+    - resolve_power_wind_columns(): tự nhận diện cột theo site (đã có)
+    - get_or_compute_classification(): cache trên dataset_manager, TÁI DÙNG nếu tool
+      khác (vd classify_turbine_status) đã gọi trước đó trong cùng session — KHÔNG
+      tính lại
+    - group_anomaly_windows_for_agent(): TÁI DÙNG NGUYÊN VẸN, giữ đúng cap
+      MAX_WINDOWS_FOR_AGENT_WITH_DATE_FILTER hiện có (KHÔNG đổi)
+    - detect_physical_violations(): hàm gốc KHÔNG hỗ trợ lọc theo start_date/end_date
+      — chạy trên TOÀN BỘ dataset, ghi rõ giới hạn này vào site_notes thay vì âm thầm
+      bỏ qua hoặc tự viết thêm logic lọc cho hàm này (ngoài phạm vi "không viết lại rule").
+
+    Muốn drill-down chi tiết hơn (xem từng dòng vi phạm cụ thể, đổi ngưỡng...), dùng
+    lại các tool gốc detect_physical_violations/classify_turbine_status/
+    group_anomaly_windows như trước — tool này KHÔNG thay thế, chỉ bổ sung cho câu hỏi
+    tổng quan.
+
+    Trả về success({period, physical_violations_whole_dataset, status_distribution,
+    anomaly_windows, site_notes}) hoặc failure(...) nếu dataset không tồn tại/không có
+    cột datetime/không nhận diện được site/khoảng thời gian không có dữ liệu.
+    physical_violations_whole_dataset đặt tên RÕ RÀNG là tính trên TOÀN BỘ dataset
+    (không phải riêng period) — detect_physical_violations() gốc không hỗ trợ lọc theo
+    ngày, đặt tên field cẩn thận hơn "physical_violations" trơn để KHÔNG ai (LLM hay
+    người đọc code) hiểu nhầm là đã lọc theo period như 2 field còn lại."""
+    df = dataset_manager.get_dataframe(dataset_name)
+    if df is None:
+        return failure(
+            f"Dataset '{dataset_name}' không tồn tại. Các dataset hiện có: {dataset_manager.list_datasets()}"
+        )
+    if "datetime" not in df.columns:
+        return failure("Dataset không có cột 'datetime' — không thể phân tích theo khoảng thời gian.")
+
+    power_column, wind_speed_column, err = resolve_power_wind_columns(dataset_manager, dataset_name, None, None)
+    if err:
+        return failure(err)
+
+    site = _detect_site(df)
+    setpoint_column = "GT1.SP.ActualSPP" if site == "site1" else None
+    site_notes = []
+    if site == "site2":
+        site_notes.append(
+            "Site 2 không có tín hiệu setpoint đáng tin cậy → nhãn Curtailment/Partial "
+            "Curtailment không bao giờ được gán ở Site 2 (xem classify_turbine_status())."
+        )
+
+    period_df, date_range_applied, err = _filter_df_by_date_range(df, "datetime", start_date, end_date)
+    if err:
+        return failure(err)
+    if len(period_df) == 0:
+        return failure(
+            f"Không có dòng dữ liệu nào trong khoảng thời gian yêu cầu "
+            f"(start_date={start_date}, end_date={end_date})."
+        )
+
+    missing_pct = {
+        col: round(float(period_df[col].isna().mean()) * 100, 2)
+        for col in period_df.columns if period_df[col].isna().any()
+    }
+    period_info = {
+        "start_date_requested": date_range_applied["start_date"],
+        "end_date_requested": date_range_applied["end_date"],
+        "actual_start": str(period_df["datetime"].min()),
+        "actual_end": str(period_df["datetime"].max()),
+        "row_count": len(period_df),
+        "missing_pct": missing_pct,
+    }
+
+    # --- Physical violations: TOÀN BỘ dataset (hàm gốc không hỗ trợ lọc theo ngày) ---
+    violations_result = detect_physical_violations(dataset_manager, dataset_name=dataset_name)
+    if not violations_result["ok"]:
+        return violations_result
+    physical_violations = {
+        rule_name: {"count": info["count"], "pct": info["pct"]}
+        for rule_name, info in violations_result["data"]["rules"].items()
+        if info.get("applicable")
+    }
+    if start_date is not None or end_date is not None:
+        site_notes.append(
+            "physical_violations_whole_dataset tính trên TOÀN BỘ dataset "
+            "(detect_physical_violations không hỗ trợ lọc theo khoảng thời gian) — "
+            "KHÔNG giới hạn theo start_date/end_date như các phần khác của kết quả này."
+        )
+
+    # --- Status classification: TÁI DÙNG cache, tự lọc theo period (mirror cách
+    # group_anomaly_windows_for_agent lọc windows theo start_time) ---
+    classification_result = get_or_compute_classification(
+        dataset_manager, dataset_name, power_column, wind_speed_column, setpoint_column, TURBINE_DEFAULT_BIN_WIDTH,
+    )
+    if not classification_result["ok"]:
+        return classification_result
+    classification = classification_result["data"]["classification"]
+    period_index = set(period_df.index)
+    status_counts: dict[str, int] = {}
+    for idx, label in classification.items():
+        if idx in period_index:
+            status_counts[label] = status_counts.get(label, 0) + 1
+    total_classified = sum(status_counts.values())
+    status_distribution = {
+        label: {
+            "count": status_counts.get(label, 0),
+            "pct": round(100 * status_counts.get(label, 0) / total_classified, 2) if total_classified else 0.0,
+        }
+        for label in CLASSIFICATION_LABELS
+    }
+
+    # --- Anomaly windows: TÁI DÙNG group_anomaly_windows_for_agent() NGUYÊN VẸN ---
+    windows_result = group_anomaly_windows_for_agent(
+        dataset_manager, dataset_name, "datetime", power_column, wind_speed_column, setpoint_column,
+        TURBINE_DEFAULT_BIN_WIDTH, 3, ["Normal"], start_date=start_date, end_date=end_date,
+    )
+    if not windows_result["ok"]:
+        return windows_result
+    windows_data = windows_result["data"]
+    windows = windows_data["windows"]
+    windows_by_label: dict[str, int] = {}
+    for w in windows:
+        windows_by_label[w["label"]] = windows_by_label.get(w["label"], 0) + 1
+    top_windows = sorted(windows, key=_window_duration_seconds, reverse=True)[:top_n]
+    anomaly_windows = {
+        "total_windows": windows_data["windows_total_found"],
+        "count_by_label": windows_by_label,
+        "top_windows": [
+            {
+                "label": w["label"], "start_time": w["start_time"],
+                "end_time": w["end_time"], "duration": w["duration"],
+            }
+            for w in top_windows
+        ],
+        "windows_truncated": windows_data.get("windows_truncated", False),
+    }
+    if windows_data.get("windows_truncated"):
+        site_notes.append(windows_data.get("windows_truncation_note", ""))
+        site_notes.append(
+            "count_by_label chỉ phản ánh các window CÒN HIỂN THỊ sau khi cắt bớt "
+            "(windows_truncated=True), không phải tổng thật đầy đủ theo từng nhãn."
+        )
+
+    return success({
+        "period": period_info,
+        "physical_violations_whole_dataset": physical_violations,
+        "status_distribution": status_distribution,
+        "anomaly_windows": anomaly_windows,
+        "site_notes": site_notes,
+    })

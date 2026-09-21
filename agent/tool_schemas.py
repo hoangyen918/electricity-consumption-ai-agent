@@ -497,6 +497,38 @@ PREDICT_POWER_SCHEMA = {
     },
 }
 
+ANALYZE_TURBINE_PERIOD_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "analyze_turbine_period",
+        "description": (
+            "CHỈ dùng cho dataset turbine gió. Chạy SẴN cả 3 bước chẩn đoán (physical "
+            "violations, phân loại trạng thái vận hành, khoảng thời gian bất thường) "
+            "trong 1 lần gọi, trả về TÓM TẮT GỌN — dùng cho câu hỏi TỔNG QUAN/MỞ kiểu "
+            "'tháng X có gì bất thường', 'kỳ này vận hành thế nào' khi chưa biết cụ thể "
+            "cần soi sâu vào đâu. Ưu tiên gọi tool NÀY TRƯỚC thay vì gọi lần lượt "
+            "detect_physical_violations/classify_turbine_status/group_anomaly_windows "
+            "cho loại câu hỏi này — nhanh hơn nhiều (1-2 bước thay vì 5+) và tránh kết "
+            "quả quá lớn. Nếu sau khi xem tóm tắt cần soi sâu hơn (vd xem từng dòng vi "
+            "phạm cụ thể, đổi ngưỡng phân loại), dùng lại 3 tool chi tiết đó — tool này "
+            "KHÔNG thay thế chúng. LƯU Ý: physical_violations_whole_dataset luôn tính "
+            "trên TOÀN BỘ dataset (không lọc theo start_date/end_date được — xem "
+            "site_notes trong kết quả); status_distribution và anomaly_windows CÓ lọc "
+            "theo start_date/end_date nếu truyền."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "start_date": {"type": "string", "description": "YYYY-MM-DD. Giới hạn điểm bắt đầu cho status_distribution/anomaly_windows (không áp dụng cho physical_violations_whole_dataset). Để trống nếu muốn phân tích toàn bộ dataset."},
+                "end_date": {"type": "string", "description": "YYYY-MM-DD, bao gồm trọn ngày này. Để trống nếu không giới hạn điểm cuối."},
+                "top_n": {"type": "integer", "description": "Số khoảng thời gian bất thường DÀI NHẤT muốn xem chi tiết (mặc định 10)."},
+                "dataset_name": DATASET_NAME_PROPERTY,
+            },
+            "required": [],
+        },
+    },
+}
+
 CALCULATE_TURBINE_KPIS_SCHEMA = {
     "type": "function",
     "function": {
@@ -560,4 +592,5 @@ ALL_TOOL_SCHEMAS = [
     DETECT_ANOMALIES_ML_SCHEMA,
     PREDICT_POWER_SCHEMA,
     CALCULATE_TURBINE_KPIS_SCHEMA,
+    ANALYZE_TURBINE_PERIOD_SCHEMA,
 ]

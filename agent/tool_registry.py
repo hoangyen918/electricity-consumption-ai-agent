@@ -24,7 +24,7 @@ from agent.turbine_tool_wrappers import (
     TURBINE_DEFAULT_BIN_WIDTH,
     estimate_power_curve_for_agent, classify_turbine_status_for_agent,
     group_anomaly_windows_for_agent, detect_anomalies_ml_for_agent, predict_power_for_agent,
-    calculate_turbine_kpis_for_agent,
+    calculate_turbine_kpis_for_agent, analyze_turbine_period,
 )
 from rag.retriever import search_knowledge_base
 from tools.tool_results import failure
@@ -191,6 +191,13 @@ class CalculateTurbineKpisArgs(BaseModel):
     theoretical_power_column: Optional[str] = None
     bin_width: float = TURBINE_DEFAULT_BIN_WIDTH
     interval_minutes: Optional[float] = None
+    dataset_name: Optional[str] = None
+
+
+class AnalyzeTurbinePeriodArgs(BaseModel):
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    top_n: int = 10
     dataset_name: Optional[str] = None
 
 
@@ -364,6 +371,12 @@ def execute_tool(tool_name: str, arguments: dict, dataset_manager: DatasetManage
                 args.setpoint_column, args.theoretical_power_column, args.bin_width, args.interval_minutes,
             )
 
+        elif tool_name == "analyze_turbine_period":
+            args = AnalyzeTurbinePeriodArgs(**arguments)
+            return analyze_turbine_period(
+                dataset_manager, args.dataset_name, args.start_date, args.end_date, args.top_n,
+            )
+
         else:
             return failure(f"Unknown tool: '{tool_name}'")
 
@@ -380,5 +393,5 @@ TOOL_NAMES = [
     "correlation_analysis", "explain_anomaly",
     "detect_physical_violations", "detect_sensor_issues", "diagnose_theoretical_power_deviation",
     "estimate_power_curve", "classify_turbine_status", "group_anomaly_windows",
-    "detect_anomalies_ml", "predict_power", "calculate_turbine_kpis",
+    "detect_anomalies_ml", "predict_power", "calculate_turbine_kpis", "analyze_turbine_period",
 ]
