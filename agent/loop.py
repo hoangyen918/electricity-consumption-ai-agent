@@ -300,6 +300,27 @@ def run_agent_loop(messages: list, dataset_manager: DatasetManager) -> dict:
                                             # completeness_status là "partial"/
                                             # "insufficient", None nếu "complete"/
                                             # "unknown"/không áp dụng.
+            "synthesis_fail_reason": str | None, # Chẩn đoán synthesis fail (2026-09)
+                                            # — "empty_content"/"leaked_tokens"/
+                                            # "exception:<msg>" nếu lần gọi LLM tổng hợp
+                                            # cuối cùng (FINAL_SYNTHESIS_PROMPT) được
+                                            # THỬ nhưng thất bại, None nếu synthesis
+                                            # thành công HOẶC chưa từng thử (không có
+                                            # tool call nào thành công để tổng hợp).
+            "synthesis_finish_reason": str | None, # response.choices[0].finish_reason
+                                            # nguyên dạng provider trả — CHỈ có giá trị
+                                            # khi synthesis_fail_reason là "empty_content"
+                                            # hoặc "leaked_tokens" (có response để đọc);
+                                            # None nếu "exception:..." (có thể chưa từng
+                                            # nhận được response) hoặc không áp dụng.
+            "synthesis_usage": dict | None, # response.usage.model_dump() nguyên dạng
+                                            # (prompt_tokens/completion_tokens/
+                                            # completion_tokens_details.reasoning_tokens
+                                            # nếu provider trả) — cùng điều kiện như
+                                            # synthesis_finish_reason ở trên.
+            "synthesis_content_preview": str | None, # 300 ký tự đầu của raw content
+                                            # (TRƯỚC khi bị coi là rỗng/leaked) — cùng
+                                            # điều kiện như synthesis_finish_reason.
         }
     """
     # Completeness Tracking (Phần 2/3) cần CÂU HỎI GỐC để đánh giá — lấy TẠI ĐÂY (trước
@@ -416,6 +437,10 @@ def run_agent_loop(messages: list, dataset_manager: DatasetManager) -> dict:
                     "budget_exceeded": None,
                     "completeness_status": None,
                     "completeness_note": None,
+                    "synthesis_fail_reason": None,
+                    "synthesis_finish_reason": None,
+                    "synthesis_usage": None,
+                    "synthesis_content_preview": None,
                 }
             messages.append({"role": "assistant", "content": message.content})
             return {
@@ -429,6 +454,10 @@ def run_agent_loop(messages: list, dataset_manager: DatasetManager) -> dict:
                 "budget_exceeded": None,
                 "completeness_status": None,
                 "completeness_note": None,
+                "synthesis_fail_reason": None,
+                "synthesis_finish_reason": None,
+                "synthesis_usage": None,
+                "synthesis_content_preview": None,
             }
 
     # Ra khoi while do 1 trong 2 ly do: (a) het ngan sach max_agent_iterations (vong
@@ -442,6 +471,21 @@ def run_agent_loop(messages: list, dataset_manager: DatasetManager) -> dict:
     # lieu that chua? Neu co, thu tong hop cau tra loi tu du lieu do bang 1 lan goi LLM
     # CUOI CUNG, NGOAI ngan sach max_agent_iterations (khong lam vong lap chinh chay
     # them buoc nao) — xem FINAL_SYNTHESIS_PROMPT o tren.
+    # Chan doan synthesis fail (2026-09, dieu tra "0/1419 graceful_termination=True" —
+    # con so THAT SU la 3/143 record sau commit 7206d0e, ca 3 deu fail synthesis ma
+    # KHONG co dong log retry nao tu chat_completion(), nghia la HTTP call THANH CONG
+    # nhung content rong/leaked-token — khong the phan biet chinh xac 2 truong hop do tu
+    # agent_trace.jsonl vi KHONG luu gi ve ly do that bai. 4 bien nay CHI duoc gan gia
+    # tri khi synthesis THAT SU duoc thu VA that bai (None khi thanh cong HOAC khi
+    # khong co tool call thanh cong nao de thu synthesis — dung yeu cau) — KHOI TAO o
+    # day (TRUOC if has_successful_tool_call:) vi return fallback cuoi cung ben duoi co
+    # the roi vao ca 2 truong hop: co thu synthesis nhung that bai, HOAC chua bao gio
+    # thu synthesis (has_successful_tool_call=False) — bien phai luon ton tai o ca 2.
+    synthesis_fail_reason = None
+    synthesis_finish_reason = None
+    synthesis_usage = None
+    synthesis_content_preview = None
+
     has_successful_tool_call = any(t["result"]["ok"] for t in trace)
     if has_successful_tool_call:
         messages.append({"role": "user", "content": FINAL_SYNTHESIS_PROMPT})
@@ -459,10 +503,30 @@ def run_agent_loop(messages: list, dataset_manager: DatasetManager) -> dict:
                 and not _looks_like_leaked_internal_tokens(synthesis_message.content)
             ):
                 synthesis_content = synthesis_message.content
-        except Exception:
+            elif not synthesis_message.content or not synthesis_message.content.strip():
+                synthesis_fail_reason = "empty_content"
+            else:
+                synthesis_fail_reason = "leaked_tokens"
+        except Exception as exc:
             # Loi khi goi lan tong hop cuoi cung (vd het retry API) -> roi xuong
             # fallback cu ben duoi, KHONG de loi nay lam crash ca Agent.ask().
             synthesis_content = None
+            synthesis_fail_reason = f"exception:{exc}"
+
+        if synthesis_content is None and synthesis_response is not None:
+            # Chi trich xuat finish_reason/usage/preview khi THAT BAI (thanh cong thi
+            # giu None dung yeu cau) VA THUC SU co response de doc (khong co neu
+            # exception xay ra truoc khi nhan duoc response nao, vd loi ket noi —
+            # synthesis_response con la None trong truong hop do).
+            try:
+                synthesis_finish_reason = synthesis_response.choices[0].finish_reason
+            except Exception:
+                pass
+            if synthesis_response.usage:
+                synthesis_usage = synthesis_response.usage.model_dump()
+            raw_content = synthesis_response.choices[0].message.content
+            if raw_content:
+                synthesis_content_preview = raw_content[:300]
 
         if synthesis_content:
             if synthesis_response.usage:
@@ -492,6 +556,10 @@ def run_agent_loop(messages: list, dataset_manager: DatasetManager) -> dict:
                 "budget_exceeded": budget_exceeded_reason,
                 "completeness_status": completeness_status,
                 "completeness_note": completeness_note,
+                "synthesis_fail_reason": None,
+                "synthesis_finish_reason": None,
+                "synthesis_usage": None,
+                "synthesis_content_preview": None,
             }
         # Tong hop that bai (content rong/leaked/exception) -> bo FINAL_SYNTHESIS_PROMPT
         # vua them, khong de rac trong lich su hoi thoai, dung fallback cu ben duoi.
@@ -510,4 +578,8 @@ def run_agent_loop(messages: list, dataset_manager: DatasetManager) -> dict:
         "budget_exceeded": budget_exceeded_reason,
         "completeness_status": None,
         "completeness_note": None,
+        "synthesis_fail_reason": synthesis_fail_reason,
+        "synthesis_finish_reason": synthesis_finish_reason,
+        "synthesis_usage": synthesis_usage,
+        "synthesis_content_preview": synthesis_content_preview,
     }

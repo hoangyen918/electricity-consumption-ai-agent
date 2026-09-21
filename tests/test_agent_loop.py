@@ -60,13 +60,23 @@ def _fake_tool_call(call_id: str, name: str, arguments: str):
     return tc
 
 
-def _fake_response(message, usage_tokens=(10, 5)):
+def _fake_response(message, usage_tokens=(10, 5), finish_reason="stop"):
+    """finish_reason mặc định "stop" (không ảnh hưởng test cũ — trước đây không có
+    test nào đọc field này). usage.model_dump() được set THẬT (không phải MagicMock
+    tự sinh) để test synthesis_usage (Phần "synthesis fail diagnostics") đọc được dict
+    thật, giống response.usage.model_dump() thật của SDK."""
     resp = MagicMock()
-    resp.choices = [MagicMock(message=message)]
+    resp.choices = [MagicMock(message=message, finish_reason=finish_reason)]
     if usage_tokens is None:
         resp.usage = None
     else:
-        resp.usage = MagicMock(prompt_tokens=usage_tokens[0], completion_tokens=usage_tokens[1])
+        usage = MagicMock(prompt_tokens=usage_tokens[0], completion_tokens=usage_tokens[1])
+        usage.model_dump.return_value = {
+            "prompt_tokens": usage_tokens[0],
+            "completion_tokens": usage_tokens[1],
+            "total_tokens": usage_tokens[0] + usage_tokens[1],
+        }
+        resp.usage = usage
     return resp
 
 
@@ -770,3 +780,134 @@ def test_run_agent_loop_completeness_check_failure_does_not_break_main_answer(mo
     assert result["answer"] == "Kết quả tổng hợp: 42."
     assert result["completeness_status"] == "unknown"
     assert result["completeness_note"] is None
+
+
+# =============================== Synthesis fail diagnostics (dieu tra 3/143 record that) ===============================
+
+def test_run_agent_loop_synthesis_fail_reason_is_empty_content(monkeypatch):
+    """Synthesis call THANH CONG ve mat HTTP (co response, co finish_reason/usage) nhung
+    content rong — dung DUNG kich ban that quan sat duoc (khong co dong retry nao trong
+    log that, tuc HTTP call thanh cong nhung content rong/leaked)."""
+    monkeypatch.setattr("agent.loop.SETTINGS.max_agent_iterations", 1)
+
+    tc1 = _fake_tool_call("call_1", "aggregate_metric", "{}")
+    msg1 = _fake_message(tool_calls=[tc1], content=None)
+    empty_synthesis_msg = _fake_message(tool_calls=None, content="   ")
+
+    responses = [
+        _fake_response(msg1),
+        _fake_response(empty_synthesis_msg, usage_tokens=(500, 0), finish_reason="stop"),
+    ]
+
+    with patch("agent.loop.chat_completion", side_effect=responses), \
+         patch("agent.loop.execute_tool", return_value=success({"result": 42})):
+        result = run_agent_loop([{"role": "user", "content": "Câu hỏi?"}], dataset_manager=MagicMock())
+
+    assert result["graceful_termination"] is False
+    assert result["synthesis_fail_reason"] == "empty_content"
+    assert result["synthesis_finish_reason"] == "stop"
+    assert result["synthesis_usage"] == {"prompt_tokens": 500, "completion_tokens": 0, "total_tokens": 500}
+    # content chi co khoang trang -> preview van la chuoi khoang trang (khong None, vi
+    # raw_content la truthy "   ", chi that bai o buoc .strip() rong).
+    assert result["synthesis_content_preview"] == "   "
+
+
+def test_run_agent_loop_synthesis_fail_reason_is_leaked_tokens(monkeypatch):
+    """Synthesis call THANH CONG ve mat HTTP nhung content chua token noi bo bi lo (dung
+    mau THAT da quan sat — REAL_LEAKED_TOKEN_SAMPLE)."""
+    monkeypatch.setattr("agent.loop.SETTINGS.max_agent_iterations", 1)
+
+    tc1 = _fake_tool_call("call_1", "aggregate_metric", "{}")
+    msg1 = _fake_message(tool_calls=[tc1], content=None)
+    leaked_synthesis_msg = _fake_message(tool_calls=None, content=REAL_LEAKED_TOKEN_SAMPLE)
+
+    responses = [
+        _fake_response(msg1),
+        _fake_response(leaked_synthesis_msg, usage_tokens=(500, 30), finish_reason="stop"),
+    ]
+
+    with patch("agent.loop.chat_completion", side_effect=responses), \
+         patch("agent.loop.execute_tool", return_value=success({"result": 42})):
+        result = run_agent_loop([{"role": "user", "content": "Câu hỏi?"}], dataset_manager=MagicMock())
+
+    assert result["graceful_termination"] is False
+    assert result["synthesis_fail_reason"] == "leaked_tokens"
+    assert result["synthesis_finish_reason"] == "stop"
+    assert result["synthesis_usage"] == {"prompt_tokens": 500, "completion_tokens": 30, "total_tokens": 530}
+    assert result["synthesis_content_preview"] == REAL_LEAKED_TOKEN_SAMPLE[:300]
+
+
+def test_run_agent_loop_synthesis_fail_reason_is_exception(monkeypatch):
+    """Synthesis call THAT BAI o muc HTTP/API (raise exception, vd tunnel loi) — KHONG
+    co response nao ca -> finish_reason/usage/preview PHAI la None (khong the doc tu
+    response khong ton tai), CHI synthesis_fail_reason co gia tri ('exception:<msg>')."""
+    monkeypatch.setattr("agent.loop.SETTINGS.max_agent_iterations", 1)
+
+    tc1 = _fake_tool_call("call_1", "aggregate_metric", "{}")
+    msg1 = _fake_message(tool_calls=[tc1], content=None)
+
+    call_count = {"n": 0}
+
+    def side_effect(*args, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return _fake_response(msg1)
+        raise RuntimeError("Chat completion failed after 3 attempts: 503 Service Unavailable")
+
+    with patch("agent.loop.chat_completion", side_effect=side_effect), \
+         patch("agent.loop.execute_tool", return_value=success({"result": 42})):
+        result = run_agent_loop([{"role": "user", "content": "Câu hỏi?"}], dataset_manager=MagicMock())
+
+    assert result["graceful_termination"] is False
+    assert result["synthesis_fail_reason"] == (
+        "exception:Chat completion failed after 3 attempts: 503 Service Unavailable"
+    )
+    assert result["synthesis_finish_reason"] is None
+    assert result["synthesis_usage"] is None
+    assert result["synthesis_content_preview"] is None
+
+
+def test_run_agent_loop_synthesis_fields_are_none_on_success(monkeypatch):
+    """Synthesis THANH CONG — ca 4 field chan doan moi PHAI la None (dung yeu cau: chi
+    ghi khi that bai)."""
+    monkeypatch.setattr("agent.loop.SETTINGS.max_agent_iterations", 1)
+
+    tc1 = _fake_tool_call("call_1", "aggregate_metric", "{}")
+    msg1 = _fake_message(tool_calls=[tc1], content=None)
+    synthesis_msg = _fake_message(tool_calls=None, content="Kết quả: 42.")
+    completeness_msg = _fake_message(tool_calls=None, content='{"status": "complete", "missing": null}')
+
+    responses = [_fake_response(msg1), _fake_response(synthesis_msg), _fake_response(completeness_msg)]
+
+    with patch("agent.loop.chat_completion", side_effect=responses), \
+         patch("agent.loop.execute_tool", return_value=success({"result": 42})):
+        result = run_agent_loop([{"role": "user", "content": "Câu hỏi?"}], dataset_manager=MagicMock())
+
+    assert result["graceful_termination"] is True
+    assert result["synthesis_fail_reason"] is None
+    assert result["synthesis_finish_reason"] is None
+    assert result["synthesis_usage"] is None
+    assert result["synthesis_content_preview"] is None
+
+
+def test_run_agent_loop_synthesis_diagnostic_fields_none_when_synthesis_never_attempted(monkeypatch):
+    """Khong co tool call nao thanh cong tu dau -> synthesis KHONG BAO GIO duoc thu (xem
+    has_successful_tool_call) — 4 field chan doan van phai la None (khong bi
+    NameError/undefined do bien duoc khoi tao truoc if has_successful_tool_call:)."""
+    monkeypatch.setattr("agent.loop.SETTINGS.max_agent_iterations", 2)
+
+    tc1 = _fake_tool_call("call_1", "aggregate_metric", "{}")
+    tc2 = _fake_tool_call("call_2", "aggregate_metric", "{}")
+    msg1 = _fake_message(tool_calls=[tc1], content=None)
+    msg2 = _fake_message(tool_calls=[tc2], content=None)
+    responses = [_fake_response(msg1), _fake_response(msg2)]
+
+    with patch("agent.loop.chat_completion", side_effect=responses), \
+         patch("agent.loop.execute_tool", return_value={"ok": False, "error": "Dataset không tồn tại."}):
+        result = run_agent_loop([{"role": "user", "content": "Câu hỏi?"}], dataset_manager=MagicMock())
+
+    assert result["graceful_termination"] is False
+    assert result["synthesis_fail_reason"] is None
+    assert result["synthesis_finish_reason"] is None
+    assert result["synthesis_usage"] is None
+    assert result["synthesis_content_preview"] is None
