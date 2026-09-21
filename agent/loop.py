@@ -161,6 +161,103 @@ def _check_budget_exceeded(
     return None
 
 
+# Completeness Tracking (Phần 2/3) — CHỈ áp dụng khi graceful_termination=True (dừng
+# CƯỠNG BỨC do hết max_agent_iterations hoặc Request Budget, KHÔNG phải agent tự hoàn
+# tất bình thường) — tránh tốn thêm 1 lệnh gọi LLM cho MỌI câu trả lời (đa số đã ổn).
+# Dùng model CHÍNH (SETTINGS.chat_model qua chat_completion() mặc định, KHÔNG truyền
+# model= riêng) — đây là kiểm tra "đã trả lời đủ CÂU HỎI TASK chưa", khác bản chất với
+# LLM-as-a-Judge (evals/llm_judge.py, chấm RAG faithfulness/citation bằng model JUDGE
+# riêng) nên KHÔNG tái dùng model/prompt của Judge.
+_COMPLETENESS_CHECK_PROMPT_TEMPLATE = (
+    "Câu hỏi gốc: {question}\n"
+    "Câu trả lời đã tổng hợp: {answer}\n"
+    "Các bước đã thực hiện: {steps_summary}\n\n"
+    "Đánh giá: câu trả lời trên có ĐẦY ĐỦ trả lời câu hỏi gốc không?\n"
+    "Trả về CHỈ JSON (không thêm markdown code fence, không giải thích gì thêm), đúng "
+    "cấu trúc sau:\n"
+    '{{"status": "complete"|"partial"|"insufficient", "missing": "mô tả ngắn phần còn '
+    'thiếu, null nếu complete"}}'
+)
+
+_VALID_COMPLETENESS_STATUSES = {"complete", "partial", "insufficient"}
+
+
+def _extract_completeness_json(raw: str) -> dict | None:
+    """Parse JSON từ response completeness-check — 3 lớp phòng thủ GIỐNG _call_judge()
+    của evals/llm_judge.py (viết lại ngắn gọn tại đây thay vì import module đó — tránh
+    tạo phụ thuộc ngược agent/ -> evals/, evals/ vốn được thiết kế là cây script/test
+    độc lập, không phải thứ agent/ runtime nên phụ thuộc vào): thử json.loads() trực
+    tiếp, rồi bỏ markdown code fence nếu có, rồi cuối cùng đo độ sâu ngoặc {} tìm khối
+    JSON cân bằng đầu tiên (bắt trường hợp model thêm lời dẫn/giải thích dù prompt đã
+    yêu cầu chỉ trả JSON thuần). Trả None nếu cả 3 lớp đều thất bại."""
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+
+    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw.strip(), flags=re.MULTILINE)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+
+    start = raw.find("{")
+    while start != -1:
+        depth = 0
+        for i in range(start, len(raw)):
+            if raw[i] == "{":
+                depth += 1
+            elif raw[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    candidate = raw[start:i + 1]
+                    try:
+                        return json.loads(candidate)
+                    except json.JSONDecodeError:
+                        break
+        start = raw.find("{", start + 1)
+    return None
+
+
+def _check_answer_completeness(
+    original_question: str, final_answer: str, trace: list[dict],
+) -> tuple[str, str | None]:
+    """CHỈ gọi khi graceful_termination=True (dừng cưỡng bức, không phải agent tự hoàn
+    tất bình thường — xem nơi gọi trong run_agent_loop()). Dùng 1 lệnh gọi LLM NHẸ
+    (model CHÍNH, không phải Judge riêng — đây là kiểm tra task completeness, không
+    phải RAG faithfulness) để phân loại:
+    - "complete": đủ trả lời câu hỏi
+    - "partial": trả lời được 1 phần, note ghi rõ phần thiếu
+    - "insufficient": không đủ dữ liệu để trả lời gì có ý nghĩa
+
+    Trả về (status, note). note=None nếu status="complete" hoặc nếu chính bước kiểm
+    tra này thất bại (status="unknown" trong trường hợp đó).
+
+    KHÔNG raise nếu lệnh gọi LLM/parse JSON thất bại (lỗi tunnel/API, model trả rác...)
+    — đây là bước BỔ SUNG (post-processing sau khi câu trả lời chính đã có xong),
+    KHÔNG được phép làm hỏng/crash câu trả lời chính đã tổng hợp được."""
+    steps_summary = "; ".join(
+        f"{t['tool_name']} ({'OK' if t['result']['ok'] else 'FAIL'})" for t in trace
+    ) or "(không có bước nào)"
+    prompt = _COMPLETENESS_CHECK_PROMPT_TEMPLATE.format(
+        question=original_question, answer=final_answer, steps_summary=steps_summary,
+    )
+    try:
+        response = chat_completion([{"role": "user", "content": prompt}])
+        raw = response.choices[0].message.content or ""
+        parsed = _extract_completeness_json(raw)
+        if parsed is None:
+            return "unknown", None
+        status = parsed.get("status")
+        if status not in _VALID_COMPLETENESS_STATUSES:
+            return "unknown", None
+        missing = parsed.get("missing")
+        note = missing if status != "complete" and missing else None
+        return status, note
+    except Exception:
+        return "unknown", None
+
+
 def run_agent_loop(messages: list, dataset_manager: DatasetManager) -> dict:
     """
     Chạy vòng lặp agent trên messages (list đã có system + user messages).
@@ -192,8 +289,27 @@ def run_agent_loop(messages: list, dataset_manager: DatasetManager) -> dict:
                                             # iteration THẬT SỰ chưa chạm max), nhưng
                                             # vẫn đi qua ĐÚNG code path graceful
                                             # termination (Part A) như khi hết iteration.
+            "completeness_status": str | None, # Completeness Tracking (Phần 2/3) —
+                                            # "complete"/"partial"/"insufficient"/
+                                            # "unknown" NẾU graceful_termination=True
+                                            # (xem _check_answer_completeness()), None
+                                            # nếu graceful_termination=False (không kiểm
+                                            # tra — tránh tốn thêm 1 lệnh gọi LLM cho MỌI
+                                            # câu trả lời bình thường, đa số đã ổn).
+            "completeness_note": str | None, # Mô tả ngắn phần còn thiếu nếu
+                                            # completeness_status là "partial"/
+                                            # "insufficient", None nếu "complete"/
+                                            # "unknown"/không áp dụng.
         }
     """
+    # Completeness Tracking (Phần 2/3) cần CÂU HỎI GỐC để đánh giá — lấy TẠI ĐÂY (trước
+    # khi vòng lặp bên dưới mutate `messages`), vì sau này FINAL_SYNTHESIS_PROMPT cũng
+    # được append với role="user" — nếu lấy "user message cuối cùng" ở thời điểm graceful
+    # termination sẽ vô tình lấy nhầm FINAL_SYNTHESIS_PROMPT thay vì câu hỏi thật.
+    original_question = next(
+        (m["content"] for m in reversed(messages) if m["role"] == "user"), "",
+    )
+
     trace = []
     usage_per_call = []
     iteration = 0
@@ -298,6 +414,8 @@ def run_agent_loop(messages: list, dataset_manager: DatasetManager) -> dict:
                     "empty_content_retries": total_empty_retries,
                     "graceful_termination": False,
                     "budget_exceeded": None,
+                    "completeness_status": None,
+                    "completeness_note": None,
                 }
             messages.append({"role": "assistant", "content": message.content})
             return {
@@ -309,6 +427,8 @@ def run_agent_loop(messages: list, dataset_manager: DatasetManager) -> dict:
                 "empty_content_retries": total_empty_retries,
                 "graceful_termination": False,
                 "budget_exceeded": None,
+                "completeness_status": None,
+                "completeness_note": None,
             }
 
     # Ra khoi while do 1 trong 2 ly do: (a) het ngan sach max_agent_iterations (vong
@@ -352,6 +472,15 @@ def run_agent_loop(messages: list, dataset_manager: DatasetManager) -> dict:
                     "output_tokens": synthesis_response.usage.completion_tokens,
                 })
             messages.append({"role": "assistant", "content": synthesis_content})
+            # Completeness Tracking (Phần 2/3) — CHỈ gọi ở đây, đúng path
+            # graceful_termination=True duy nhất (dừng cưỡng bức NHƯNG vẫn tổng hợp
+            # được câu trả lời thật). Gọi SAU KHI đã có final answer/đã append vào
+            # messages (post-processing, không ảnh hưởng vòng lặp chính đã dừng hẳn) —
+            # lỗi ở bước này (nếu có) tự rơi về "unknown", không crash câu trả lời
+            # chính đã có (xem _check_answer_completeness()).
+            completeness_status, completeness_note = _check_answer_completeness(
+                original_question, synthesis_content, trace,
+            )
             return {
                 "answer": synthesis_content,
                 "trace": trace,
@@ -361,6 +490,8 @@ def run_agent_loop(messages: list, dataset_manager: DatasetManager) -> dict:
                 "empty_content_retries": total_empty_retries,
                 "graceful_termination": True,
                 "budget_exceeded": budget_exceeded_reason,
+                "completeness_status": completeness_status,
+                "completeness_note": completeness_note,
             }
         # Tong hop that bai (content rong/leaked/exception) -> bo FINAL_SYNTHESIS_PROMPT
         # vua them, khong de rac trong lich su hoi thoai, dung fallback cu ben duoi.
@@ -377,4 +508,6 @@ def run_agent_loop(messages: list, dataset_manager: DatasetManager) -> dict:
         "empty_content_retries": total_empty_retries,
         "graceful_termination": False,
         "budget_exceeded": budget_exceeded_reason,
+        "completeness_status": None,
+        "completeness_note": None,
     }

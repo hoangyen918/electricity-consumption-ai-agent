@@ -634,6 +634,13 @@ def render_trace_expander(trace_info: dict, msg_id):
         col2.metric("Thời gian", f"{trace_info['latency_ms']:.0f} ms")
         col3.metric("Chi phí ước tính", f"${trace_info['estimated_cost_usd']:.6f}")
 
+        # Completeness Tracking (Phần 2/3) — chỉ hiện khi có note (nghĩa là
+        # completeness_status là "partial"/"insufficient", xem agent/loop.py::
+        # _check_answer_completeness() — note luôn None cho "complete"/"unknown"/không
+        # áp dụng, nên chỉ cần kiểm tra note là đủ, không cần so sánh status riêng).
+        if trace_info.get("completeness_note"):
+            st.caption(f"⚠️ Câu trả lời có thể chưa đầy đủ: {trace_info['completeness_note']}")
+
         # Tính SỚM (trước khi liệt kê chunk) để biết chunk nào thực sự được trích,
         # dùng chung cho cả preview dài hơn (bên dưới) lẫn phần "Đánh giá câu trả lời".
         answer = trace_info.get("answer", "")
@@ -2473,6 +2480,8 @@ def _handle_chat_question(question: str) -> None:
                         "usage_per_call": result["usage_per_call"],
                         "answer": result["answer"],
                         "question": question,
+                        "completeness_status": result.get("completeness_status"),
+                        "completeness_note": result.get("completeness_note"),
                     }
                     # msg_id = index NÓ sẽ có trong chat_history sau khi append bên dưới
                     # (user message đã append, len hiện tại == index tương lai của assistant)

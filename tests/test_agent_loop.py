@@ -19,6 +19,8 @@ from agent.loop import (
     _is_redundant_call,
     FINAL_SYNTHESIS_PROMPT,
     _check_budget_exceeded,
+    _check_answer_completeness,
+    _extract_completeness_json,
 )
 from agent.tool_schemas import ALL_TOOL_SCHEMAS, CALCULATE_SCHEMA
 from tools.tool_results import success
@@ -340,12 +342,17 @@ def test_run_agent_loop_falls_back_when_synthesis_call_itself_fails(monkeypatch)
 
 def test_run_agent_loop_falls_back_when_synthesis_call_no_tool_kwarg(monkeypatch):
     """Xac nhan lan goi tong hop cuoi cung KHONG truyen 'tools' — model bi buoc phai
-    tra loi bang text, khong the goi them tool nao."""
+    tra loi bang text, khong the goi them tool nao. Cung xac nhan lan goi completeness
+    check (lan 3, Phan 2/3 — chi kich hoat vi graceful_termination=True o day) CUNG
+    khong truyen 'tools' (dung 1 cau JSON gon, khong dua vao tool nao)."""
     monkeypatch.setattr("agent.loop.SETTINGS.max_agent_iterations", 1)
 
     tc1 = _fake_tool_call("call_1", "aggregate_metric", "{}")
     msg1 = _fake_message(tool_calls=[tc1], content=None)
     synthesis_msg = _fake_message(tool_calls=None, content="Kết quả: 42.")
+    completeness_msg = _fake_message(
+        tool_calls=None, content='{"status": "complete", "missing": null}',
+    )
 
     captured_calls = []
 
@@ -353,15 +360,19 @@ def test_run_agent_loop_falls_back_when_synthesis_call_no_tool_kwarg(monkeypatch
         captured_calls.append(kwargs)
         if len(captured_calls) == 1:
             return _fake_response(msg1)
-        return _fake_response(synthesis_msg)
+        if len(captured_calls) == 2:
+            return _fake_response(synthesis_msg)
+        return _fake_response(completeness_msg)
 
     with patch("agent.loop.chat_completion", side_effect=side_effect), \
          patch("agent.loop.execute_tool", return_value=success({"result": 42})):
         result = run_agent_loop([{"role": "user", "content": "Câu hỏi?"}], dataset_manager=MagicMock())
 
     assert result["graceful_termination"] is True
-    assert len(captured_calls) == 2
+    assert len(captured_calls) == 3
     assert "tools" not in captured_calls[1]
+    assert "tools" not in captured_calls[2]
+    assert result["completeness_status"] == "complete"
 
 
 def test_run_agent_loop_falls_back_cleanly_when_leaked_tokens_persist_past_retry_budget():
@@ -551,4 +562,211 @@ def test_run_agent_loop_budget_exceeded_is_none_when_hitting_normal_iteration_ca
 
     assert result["hit_max_iterations"] is True
     assert result["budget_exceeded"] is None
+
+
+# =============================== Completeness Tracking (Phần 2/3) — _extract_completeness_json ===============================
+
+def test_extract_completeness_json_parses_plain_json():
+    raw = '{"status": "partial", "missing": "chưa phân tích tháng 2"}'
+    assert _extract_completeness_json(raw) == {"status": "partial", "missing": "chưa phân tích tháng 2"}
+
+
+def test_extract_completeness_json_strips_markdown_fence():
+    raw = '```json\n{"status": "complete", "missing": null}\n```'
+    assert _extract_completeness_json(raw) == {"status": "complete", "missing": None}
+
+
+def test_extract_completeness_json_finds_balanced_object_amid_prose():
+    """Bat truong hop model them loi dan du prompt da yeu cau chi tra JSON thuan —
+    lop phong thu thu 3 (do sau ngoac {})."""
+    raw = 'Đây là đánh giá của tôi: {"status": "insufficient", "missing": "không đủ dữ liệu"} Hy vọng hữu ích.'
+    assert _extract_completeness_json(raw) == {"status": "insufficient", "missing": "không đủ dữ liệu"}
+
+
+def test_extract_completeness_json_returns_none_for_unparseable_text():
+    assert _extract_completeness_json("không phải JSON gì cả") is None
+
+
+# =============================== Completeness Tracking (Phần 2/3) — _check_answer_completeness ===============================
+
+def test_check_answer_completeness_returns_partial_with_note():
+    msg = _fake_message(
+        tool_calls=None,
+        content='{"status": "partial", "missing": "chưa phân tích bất thường tháng 2/2024"}',
+    )
+    with patch("agent.loop.chat_completion", return_value=_fake_response(msg)):
+        status, note = _check_answer_completeness(
+            "phân tích dữ liệu gió tháng 2/2024, có gì bất thường không",
+            "his_data_GT1 có dữ liệu tháng 2/2024, tổng 8352 dòng.",
+            [_fake_trace_entry("get_dataset_summary")],
+        )
+    assert status == "partial"
+    assert note == "chưa phân tích bất thường tháng 2/2024"
+
+
+def test_check_answer_completeness_note_is_none_when_complete():
+    msg = _fake_message(tool_calls=None, content='{"status": "complete", "missing": null}')
+    with patch("agent.loop.chat_completion", return_value=_fake_response(msg)):
+        status, note = _check_answer_completeness("Câu hỏi?", "Trả lời đủ.", [])
+    assert status == "complete"
+    assert note is None
+
+
+def test_check_answer_completeness_falls_back_to_unknown_on_api_exception():
+    """KHONG duoc raise neu lenh goi LLM that bai (tunnel/API loi) — day la buoc BO
+    SUNG, khong duoc lam hong cau tra loi chinh da co."""
+    with patch("agent.loop.chat_completion", side_effect=RuntimeError("tunnel down")):
+        status, note = _check_answer_completeness("Câu hỏi?", "Trả lời.", [])
+    assert status == "unknown"
+    assert note is None
+
+
+def test_check_answer_completeness_falls_back_to_unknown_on_invalid_json():
+    msg = _fake_message(tool_calls=None, content="model trả rác không phải JSON")
+    with patch("agent.loop.chat_completion", return_value=_fake_response(msg)):
+        status, note = _check_answer_completeness("Câu hỏi?", "Trả lời.", [])
+    assert status == "unknown"
+    assert note is None
+
+
+def test_check_answer_completeness_falls_back_to_unknown_on_invalid_status_value():
+    """Model tra JSON hop le nhung status khong nam trong 3 gia tri cho phep — khong
+    tin tuong mu quang gia tri model tu bia ra."""
+    msg = _fake_message(tool_calls=None, content='{"status": "mostly_done", "missing": null}')
+    with patch("agent.loop.chat_completion", return_value=_fake_response(msg)):
+        status, note = _check_answer_completeness("Câu hỏi?", "Trả lời.", [])
+    assert status == "unknown"
+    assert note is None
+
+
+# =============================== Completeness Tracking (Phần 2/3) — tích hợp trong run_agent_loop ===============================
+
+def test_run_agent_loop_runs_completeness_check_only_on_graceful_termination(monkeypatch):
+    """Tai hien kich ban that gan giong Buoc 0.3 (cau hoi turbine phuc tap, GT1) — het
+    max_agent_iterations, synthesis THANH CONG (graceful_termination=True) -> PHAI kich
+    hoat completeness check, nhan dien dung 'partial' voi note hop ly. Cung xac nhan
+    prompt gui cho completeness check chua CAU HOI GOC that (khong phai FINAL_SYNTHESIS_
+    PROMPT — xem original_question duoc lay TRUOC khi vong lap mutate messages)."""
+    monkeypatch.setattr("agent.loop.SETTINGS.max_agent_iterations", 3)
+
+    question = "phân tích dữ liệu gió của tháng 2/2024, có gì bất thường không"
+    tc1 = _fake_tool_call("call_1", "get_dataset_summary", '{"dataset_name": "his_data_GT1"}')
+    tc2 = _fake_tool_call("call_2", "detect_physical_violations", '{"dataset_name": "his_data_GT1"}')
+    tc3 = _fake_tool_call("call_3", "classify_turbine_status", '{"dataset_name": "his_data_GT1"}')
+    msg1 = _fake_message(tool_calls=[tc1], content=None)
+    msg2 = _fake_message(tool_calls=[tc2], content=None)
+    msg3 = _fake_message(tool_calls=[tc3], content=None)
+    synthesis_msg = _fake_message(
+        tool_calls=None,
+        content="his_data_GT1 có dữ liệu tháng 2/2024 (8352 dòng), không phát hiện vi phạm vật lý.",
+    )
+    completeness_msg = _fake_message(
+        tool_calls=None,
+        content='{"status": "partial", "missing": "chưa gọi group_anomaly_windows để liệt kê khoảng thời gian bất thường cụ thể"}',
+    )
+
+    captured_calls = []
+
+    def side_effect(*args, **kwargs):
+        captured_calls.append((args, kwargs))
+        n = len(captured_calls)
+        if n == 1:
+            return _fake_response(msg1)
+        if n == 2:
+            return _fake_response(msg2)
+        if n == 3:
+            return _fake_response(msg3)
+        if n == 4:
+            return _fake_response(synthesis_msg)
+        return _fake_response(completeness_msg)
+
+    with patch("agent.loop.chat_completion", side_effect=side_effect), \
+         patch("agent.loop.execute_tool", return_value=success({"ok": True})):
+        result = run_agent_loop([{"role": "user", "content": question}], dataset_manager=MagicMock())
+
+    assert result["graceful_termination"] is True
+    assert len(captured_calls) == 5
+    assert result["completeness_status"] == "partial"
+    assert result["completeness_note"] == (
+        "chưa gọi group_anomaly_windows để liệt kê khoảng thời gian bất thường cụ thể"
+    )
+
+    # Prompt cua lan goi completeness check (lan thu 5) phai chua CAU HOI GOC, KHONG
+    # phai FINAL_SYNTHESIS_PROMPT (bang chung original_question duoc lay dung thoi diem).
+    completeness_call_messages = captured_calls[4][0][0]
+    completeness_prompt = completeness_call_messages[-1]["content"]
+    assert question in completeness_prompt
+    assert "Bạn đã hết ngân sách để gọi thêm tool" not in completeness_prompt
+
+
+def test_run_agent_loop_does_not_run_completeness_check_for_normal_direct_answer():
+    """Cau tra loi binh thuong (khong tool call, tra loi truc tiep, graceful_termination
+    luon False) — KHONG duoc goi completeness check (tranh ton token/chi phi cho truong
+    hop da on). Xac nhan bang cach dem SO LAN goi chat_completion — phai dung 1 (khong
+    tang len 2 vi co them completeness check)."""
+    message = _fake_message(tool_calls=None, content="Câu trả lời trực tiếp, đầy đủ.")
+    with patch("agent.loop.chat_completion", return_value=_fake_response(message)) as mock_chat:
+        result = run_agent_loop([{"role": "user", "content": "Xin chào"}], dataset_manager=MagicMock())
+
+    assert mock_chat.call_count == 1
     assert result["graceful_termination"] is False
+    assert result["completeness_status"] is None
+    assert result["completeness_note"] is None
+
+
+def test_run_agent_loop_does_not_run_completeness_check_when_synthesis_fails(monkeypatch):
+    """Neu synthesis THAT BAI (roi ve fallback cu, graceful_termination=False) — KHONG
+    goi completeness check (chi ap dung dung 1 path graceful_termination=True duy
+    nhat)."""
+    monkeypatch.setattr("agent.loop.SETTINGS.max_agent_iterations", 1)
+
+    tc1 = _fake_tool_call("call_1", "aggregate_metric", "{}")
+    msg1 = _fake_message(tool_calls=[tc1], content=None)
+
+    call_count = {"n": 0}
+
+    def side_effect(*args, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return _fake_response(msg1)
+        raise RuntimeError("synthesis call failed")
+
+    with patch("agent.loop.chat_completion", side_effect=side_effect), \
+         patch("agent.loop.execute_tool", return_value=success({"result": 42})):
+        result = run_agent_loop([{"role": "user", "content": "Câu hỏi?"}], dataset_manager=MagicMock())
+
+    assert result["graceful_termination"] is False
+    assert result["completeness_status"] is None
+    assert result["completeness_note"] is None
+    # dung 2 lan goi: msg1 + synthesis (that bai) — KHONG co lan thu 3 cho completeness.
+    assert call_count["n"] == 2
+
+
+def test_run_agent_loop_completeness_check_failure_does_not_break_main_answer(monkeypatch):
+    """Neu ban than completeness check that bai (vd tunnel loi o dung lan goi thu 2 sau
+    synthesis) — cau tra loi CHINH van duoc tra ve nguyen ven, completeness_status roi
+    ve 'unknown', KHONG crash ca run_agent_loop()."""
+    monkeypatch.setattr("agent.loop.SETTINGS.max_agent_iterations", 1)
+
+    tc1 = _fake_tool_call("call_1", "aggregate_metric", "{}")
+    msg1 = _fake_message(tool_calls=[tc1], content=None)
+    synthesis_msg = _fake_message(tool_calls=None, content="Kết quả tổng hợp: 42.")
+
+    call_count = {"n": 0}
+
+    def side_effect(*args, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return _fake_response(msg1)
+        if call_count["n"] == 2:
+            return _fake_response(synthesis_msg)
+        raise RuntimeError("tunnel down cho completeness check")
+
+    with patch("agent.loop.chat_completion", side_effect=side_effect), \
+         patch("agent.loop.execute_tool", return_value=success({"result": 42})):
+        result = run_agent_loop([{"role": "user", "content": "Câu hỏi?"}], dataset_manager=MagicMock())
+
+    assert result["graceful_termination"] is True
+    assert result["answer"] == "Kết quả tổng hợp: 42."
+    assert result["completeness_status"] == "unknown"
+    assert result["completeness_note"] is None
