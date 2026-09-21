@@ -309,7 +309,7 @@ def render_sidebar():
                     "hơn 1 dataset đang tải) — thường sẽ báo lỗi rõ ràng, không âm thầm "
                     "trả số sai."
                 )
-        # CHỈ hiện nút ở Dashboard mode (đối xứng với khối "Câu hỏi mẫu" chỉ hiện ở Chat
+        # CHỈ hiện icon ở Dashboard mode (đối xứng với khối "Câu hỏi mẫu" chỉ hiện ở Chat
         # mode ngay trên) — cho phép hỏi nhanh mà không cần rời khỏi tab Dashboard đang
         # xem. Ở đây CHỈ đặt cờ show_floating_chat=True khi bấm nút — việc THỰC SỰ gọi
         # _render_floating_chat_dialog() nằm ở CUỐI main() (chạy SAU nhánh if/else theo
@@ -317,8 +317,41 @@ def render_sidebar():
         # chi tiết tại main() lý do: submit st.chat_input bên trong dialog làm rerun đó
         # đọc NHẦM view_mode về mặc định "💬 Chat", nên không thể dựa vào view_mode để
         # quyết định có gọi lại dialog hay không.
+        #
+        # Icon nổi (position: fixed góc dưới-phải) thay vì nút sidebar thường — CHỈ đổi
+        # CÁCH HIỂN THỊ, hành vi bấm (set show_floating_chat=True) giữ nguyên 100%. CSS
+        # target qua class "st-key-<key>" mà Streamlit tự thêm vào div bọc ngoài
+        # (data-testid="stElementContainer") khi st.button() có tham số key= — ĐÃ XÁC
+        # NHẬN THẬT qua browser (kiểm tra outerHTML trực tiếp, 2026-09-18), KHÔNG đoán
+        # selector: đây là cơ chế CHÍNH THỨC của Streamlit dành riêng cho việc target CSS
+        # tùy chỉnh, ổn định hơn dựa vào nth-child/vị trí DOM. position: fixed đặt trên
+        # chính div.st-key-floating_chat_btn (không phải trên button) để cả div lẫn
+        # button bên trong cùng thoát khỏi luồng layout bình thường — đã verify qua
+        # screenshot thật: đứng yên đúng vị trí khi cuộn trang (scroll
+        # section[data-testid="stMain"], không phải window — quirk riêng của Streamlit).
         elif st.session_state.get("view_mode") == "📊 Wind Turbine Dashboard":
-            if st.button("💬 Hỏi nhanh", width="stretch"):
+            st.markdown(
+                """
+                <style>
+                div.st-key-floating_chat_btn {
+                    position: fixed;
+                    bottom: 24px;
+                    right: 24px;
+                    z-index: 999;
+                }
+                div.st-key-floating_chat_btn button {
+                    width: 56px;
+                    height: 56px;
+                    border-radius: 50%;
+                    font-size: 24px;
+                    padding: 0;
+                    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+                }
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
+            if st.button("💬", key="floating_chat_btn", help="Hỏi nhanh"):
                 st.session_state.show_floating_chat = True
 
         st.divider()
