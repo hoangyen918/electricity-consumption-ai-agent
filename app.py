@@ -716,6 +716,47 @@ def _available_turbine_datasets(manager: DatasetManager) -> list[str]:
     return fixed + uploaded_turbine
 
 
+def _bridge_wind_turbine_datasets_to_chat() -> None:
+    """Đồng bộ MỌI dataset turbine đã nạp trong wind_turbine_manager sang
+    dataset_manager (Chat) — KHÔNG còn gate theo từ khóa câu hỏi như bản cũ (xem lịch
+    sử TURBINE_QUESTION_KEYWORDS/_question_mentions_turbine() đã xóa, thay bằng cơ chế
+    set_active=False mới ở DatasetManager.load_csv()/add_dataframe(), xem
+    tools/dataset_manager.py). Gọi NGAY sau khi 1 tab Dashboard nạp xong 1 dataset (xem
+    _ensure_wind_turbine_dataset_loaded()) — KHÔNG đợi user hỏi gì trong Chat, dataset
+    "có mặt" ngay khi Dashboard từng mở nó, đúng tinh thần nhất quán Dashboard<->Chat.
+
+    set_active=False BẮT BUỘC (xem docstring load_csv()) — KHÔNG được phép cướp active
+    của dataset_manager: user Chat có thể đang thao tác Tetouan hoặc dataset khác,
+    "active" phải giữ nguyên bất kể Dashboard nạp thêm gì (đây chính là rủi ro thật đã
+    audit trước khi làm — nếu không set_active=False, mở Dashboard sẽ âm thầm đổi
+    active của Chat sang 1 dataset turbine, khiến câu hỏi Tetouan không nêu tên dataset
+    trả lời sai mà không báo lỗi).
+
+    Chạy ĐÚNG 1 LẦN mỗi dataset mỗi session — dùng st.session_state["_bridged_turbine_
+    names"] (set) đánh dấu tên đã bridge, tránh add_dataframe() lặp lại mỗi lần hàm này
+    được gọi (mỗi tab Dashboard load xong 1 dataset đều gọi hàm này). Chi phí đã đo
+    thật ~0.03-0.05s/dataset (add_dataframe() copy in-memory qua derive_time_columns(),
+    KHÔNG đọc lại đĩa) — rẻ, nhưng vẫn tránh làm lại không cần thiết mỗi rerun.
+
+    KHÔNG còn nhánh fallback đọc trực tiếp từ đĩa như bản cũ (dùng khi Chat hỏi mà
+    wind_turbine_manager chưa kịp có dữ liệu) — trigger giờ nằm NGAY SAU mỗi lần load
+    thành công của TỪNG dataset riêng lẻ (không đợi cả vòng lặp nhiều file trong 1 tab
+    xong), nên race condition "Streamlit hủy script run giữa chừng" mà bản cũ xử lý
+    không còn xảy ra theo cùng cách — dataset nào load xong đã được bridge ngay lập
+    tức, không phải đợi tới cuối tab."""
+    bridged = st.session_state.setdefault("_bridged_turbine_names", set())
+    wind_turbine_manager = st.session_state.get("wind_turbine_manager")
+    if wind_turbine_manager is None:
+        return
+    chat_manager = st.session_state.dataset_manager
+    for name in wind_turbine_manager.list_datasets():
+        if name in bridged:
+            continue
+        if name not in chat_manager.list_datasets():
+            chat_manager.add_dataframe(wind_turbine_manager.get_dataframe(name), name=name, set_active=False)
+        bridged.add(name)
+
+
 def _ensure_wind_turbine_dataset_loaded(manager: DatasetManager, key: str) -> bool:
     """Load lazy (chỉ load lần đầu, cache trong manager) 1 dataset turbine — 1 trong 5
     file cố định (đọc từ path), HOẶC 1 dataset đã TỰ UPLOAD qua sidebar (đã nằm sẵn
@@ -723,8 +764,13 @@ def _ensure_wind_turbine_dataset_loaded(manager: DatasetManager, key: str) -> bo
     `manager` qua add_dataframe(), KHÔNG đọc lại file). Trả False + hiển thị lỗi rõ
     ràng nếu file cố định không tồn tại (5 file này KHÔNG git-track, có thể thiếu trên
     máy người dùng chưa copy file — xem WIND_TURBINE_DATASET_PATHS) hoặc dataset upload
-    không còn tồn tại (vd đã bị xóa ở sidebar)."""
+    không còn tồn tại (vd đã bị xóa ở sidebar).
+
+    Mỗi nhánh return True đều gọi _bridge_wind_turbine_datasets_to_chat() ngay trước đó
+    — đồng bộ SANG Chat NGAY khi Dashboard có dữ liệu (kể cả khi dataset đã có sẵn từ
+    trước, gọi lại vẫn AN TOÀN/rẻ nhờ session_state["_bridged_turbine_names"])."""
     if key in manager.list_datasets():
+        _bridge_wind_turbine_datasets_to_chat()
         return True
 
     if key not in WIND_TURBINE_DATASET_PATHS:
@@ -734,6 +780,7 @@ def _ensure_wind_turbine_dataset_loaded(manager: DatasetManager, key: str) -> bo
             st.error(f"Không tìm thấy dataset đã upload '{key}' — có thể đã bị xóa ở sidebar.")
             return False
         manager.add_dataframe(uploaded_df, name=key)
+        _bridge_wind_turbine_datasets_to_chat()
         return True
 
     path = Path(WIND_TURBINE_DATASET_PATHS[key])
@@ -745,6 +792,7 @@ def _ensure_wind_turbine_dataset_loaded(manager: DatasetManager, key: str) -> bo
         return False
     with st.spinner(f"Đang nạp {key} ({path.stat().st_size / 1e6:.1f} MB)..."):
         manager.load_csv(str(path), name=key)
+    _bridge_wind_turbine_datasets_to_chat()
     return True
 
 
@@ -2320,76 +2368,6 @@ def render_wind_turbine_dashboard():
     dashboard_sections[selected_section]()
 
 
-# Tu khoa nhan dien cau hoi CO THE lien quan turbine gio — GATE cho bridge/fallback-
-# load Dashboard -> Chat (xem _bridge_wind_turbine_datasets_to_chat()). Ly do co gate:
-# da do THAT (dieu tra 2026-09-18) nap ca 5 file co dinh khi khong gate ton ~11-26s CHO
-# MOI session moi bat ke chu de (28.8s co gate=khop tu khoa vs 2.6s khong can nap) — chi
-# nen tra chi phi nay khi cau hoi THAT SU co the can du lieu turbine. Doi chieu voi 6 cau
-# turbine_qa THAT trong evals/cases.jsonl (deu chua "Site 1") + 3 cau mau sidebar (cung
-# "Site 1") — ca 9 cau deu khop. Han che da biet, CHAP NHAN DUOC: "gió" cung khop cau hoi
-# ve toc do gio trong dataset Tetouan (vd "Tốc độ gió trung bình tháng 6 là bao nhiêu?")
-# — false positive VO HAI (chi ton thoi gian nap thua, khong sai ket qua vi dataset that
-# can (Tetouan) van co san tu truoc, khong bi ghi de).
-TURBINE_QUESTION_KEYWORDS = [
-    "turbine", "gió", "wind", "gt1", "wt1", "wt2", "wt3", "wt4",
-    "site 1", "scada", "curtailment", "yaw", "pitch", "rotor",
-]
-
-
-def _question_mentions_turbine(question: str) -> bool:
-    """So khop case-insensitive don gian (substring) — du bao phu 6 cau turbine_qa that
-    + 3 cau mau sidebar (xem TURBINE_QUESTION_KEYWORDS), khong can NLP phuc tap."""
-    question_lower = question.lower()
-    return any(keyword in question_lower for keyword in TURBINE_QUESTION_KEYWORDS)
-
-
-def _bridge_wind_turbine_datasets_to_chat(question: str) -> None:
-    """Cầu nối CHIỀU NGƯỢC (Dashboard -> Chat) — đối xứng với cầu nối đã có sẵn
-    (Chat -> Dashboard, xem _available_turbine_datasets()/_ensure_wind_turbine_
-    dataset_loaded()). Đã xác nhận THẬT (điều tra 2026-09-18): mở Dashboard trước
-    (1 tab tự lazy-load WT1-4/GT1 vào wind_turbine_manager) rồi chuyển sang Chat hỏi
-    về dữ liệu đó sẽ bị báo "chỉ có Tetouan" — wind_turbine_manager và dataset_manager
-    là 2 INSTANCE TÁCH RIÊNG (xem _get_wind_turbine_manager()), không tự động đồng bộ.
-
-    Bước 0 (gate, tránh phí ~11-26s cho câu hỏi KHÔNG liên quan turbine — đo THẬT, xem
-    TURBINE_QUESTION_KEYWORDS): nếu `question` không khớp bất kỳ từ khóa turbine nào,
-    bỏ qua HOÀN TOÀN cả 2 bước dưới đây, giữ nguyên hành vi nhanh (0 chi phí thêm).
-
-    Bước 1 (nhanh, ưu tiên): bắc cầu dataset CÓ SẴN trong wind_turbine_manager mà
-    dataset_manager còn THIẾU (theo tên) — không đọc lại đĩa, dùng ĐÚNG add_dataframe()
-    đã có sẵn (Y HỆT cơ chế Chat -> Dashboard).
-
-    Bước 2 (fallback, xử lý RACE CONDITION đã xác nhận THẬT 2026-09-18 qua browser
-    thật): nếu wind_turbine_manager CHƯA TỒN TẠI (chưa từng mở Dashboard), hoặc CHỈ
-    kịp nạp MỘT PHẦN 5 file cố định trước khi user bấm chuyển sang Chat (Streamlit HỦY
-    script run của tab Dashboard giữa chừng — không phải bug ở bridge, bug ở chỗ
-    wind_turbine_manager không kịp có dữ liệu) — nạp TRỰC TIẾP các file cố định CÒN
-    THIẾU từ đĩa vào dataset_manager, dùng ĐÚNG _ensure_wind_turbine_dataset_loaded()
-    đã có (load_csv qua WIND_TURBINE_DATASET_PATHS), KHÔNG viết lại logic nạp file.
-    Tự bỏ qua (không làm gì) nếu file đã có trong dataset_manager từ trước — không tốn
-    thêm chi phí ở các lượt chat sau khi đã nạp đủ.
-
-    Đã thử song song hóa (ThreadPoolExecutor) — đo thật lặp lại (cả Docker) cho thấy
-    KHÔNG cải thiện đáng tin cậy, biến thiên hệ thống lớn hơn lợi ích lý thuyết — giữ
-    tuần tự."""
-    if not _question_mentions_turbine(question):
-        return
-
-    chat_manager = st.session_state.dataset_manager
-    existing_names = set(chat_manager.list_datasets())
-
-    wind_turbine_manager = st.session_state.get("wind_turbine_manager")
-    if wind_turbine_manager is not None:
-        for name in wind_turbine_manager.list_datasets():
-            if name not in existing_names:
-                chat_manager.add_dataframe(wind_turbine_manager.get_dataframe(name), name=name)
-                existing_names.add(name)
-
-    for key in WIND_TURBINE_DATASET_PATHS:
-        if key not in existing_names:
-            _ensure_wind_turbine_dataset_loaded(chat_manager, key)
-
-
 def _handle_chat_question(question: str) -> None:
     """Xử lý 1 câu hỏi chat — TÁI DÙNG bởi cả render_chat() (Chat mode) và drawer chat
     (_render_side_chat_drawer(), Dashboard mode). Đọc/ghi ĐÚNG 1 nguồn lịch sử chung
@@ -2409,7 +2387,6 @@ def _handle_chat_question(question: str) -> None:
         else:
             with st.spinner("Đang xử lý..."):
                 try:
-                    _bridge_wind_turbine_datasets_to_chat(question)
                     result = st.session_state.agent.ask(question)
                     st.session_state.session_total_cost_usd += result["estimated_cost_usd"]
                     st.write(result["answer"])

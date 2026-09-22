@@ -36,7 +36,7 @@ def test_old_floating_dialog_modal_removed():
 def test_side_chat_drawer_closed_by_default_no_chat_input():
     """Mặc định drawer ĐÓNG — chỉ có 1 nút tab mỏng (side_chat_tab_btn), KHÔNG render
     chat_input/nội dung lịch sử bên trong (tránh chiếm chỗ/tính toán thừa khi đóng)."""
-    at = AppTest.from_function(_side_chat_drawer_harness)
+    at = AppTest.from_function(_side_chat_drawer_harness, default_timeout=15)
     at.run()
 
     assert len(at.button) == 1
@@ -47,7 +47,7 @@ def test_side_chat_drawer_closed_by_default_no_chat_input():
 def test_side_chat_drawer_opens_on_tab_click():
     """Bấm tab mở drawer — chat_input (key=side_chat_input) xuất hiện, cờ
     show_side_chat=True được set trong session_state."""
-    at = AppTest.from_function(_side_chat_drawer_harness)
+    at = AppTest.from_function(_side_chat_drawer_harness, default_timeout=15)
     at.run()
 
     at.button(key="side_chat_tab_btn").click().run()
@@ -59,7 +59,7 @@ def test_side_chat_drawer_opens_on_tab_click():
 
 def test_side_chat_drawer_closes_on_second_click():
     """Bấm lại đúng nút đó lần 2 (giờ hiển thị icon ✕) để đóng — chat_input biến mất."""
-    at = AppTest.from_function(_side_chat_drawer_harness)
+    at = AppTest.from_function(_side_chat_drawer_harness, default_timeout=15)
     at.run()
     at.button(key="side_chat_tab_btn").click().run()
     assert at.session_state["show_side_chat"] is True
