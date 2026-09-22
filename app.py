@@ -105,6 +105,14 @@ def load_case_questions() -> dict[str, str]:
     return questions
 
 
+@st.cache_data(ttl=30, show_spinner=False)
+def _load_kb_sidebar_snapshot() -> tuple[int, list[dict]]:
+    """Cache metadata KB giữa các rerun UI; thao tác ghi sẽ chủ động xóa cache."""
+    from rag.kb_manager import list_sources_with_chunk_counts
+
+    return count_documents(), list_sources_with_chunk_counts()
+
+
 def init_session_state():
     if "dataset_manager" not in st.session_state:
         st.session_state.dataset_manager = DatasetManager()
@@ -309,58 +317,14 @@ def render_sidebar():
                     "hơn 1 dataset đang tải) — thường sẽ báo lỗi rõ ràng, không âm thầm "
                     "trả số sai."
                 )
-        # CHỈ hiện icon ở Dashboard mode (đối xứng với khối "Câu hỏi mẫu" chỉ hiện ở Chat
-        # mode ngay trên) — cho phép hỏi nhanh mà không cần rời khỏi tab Dashboard đang
-        # xem. Ở đây CHỈ đặt cờ show_floating_chat=True khi bấm nút — việc THỰC SỰ gọi
-        # _render_floating_chat_dialog() nằm ở CUỐI main() (chạy SAU nhánh if/else theo
-        # mode, ĐỘC LẬP với mode, KHÔNG đặt trong nhánh Dashboard ở đây) — xem comment
-        # chi tiết tại main() lý do: submit st.chat_input bên trong dialog làm rerun đó
-        # đọc NHẦM view_mode về mặc định "💬 Chat", nên không thể dựa vào view_mode để
-        # quyết định có gọi lại dialog hay không.
-        #
-        # Icon nổi (position: fixed góc dưới-phải) thay vì nút sidebar thường — CHỈ đổi
-        # CÁCH HIỂN THỊ, hành vi bấm (set show_floating_chat=True) giữ nguyên 100%. CSS
-        # target qua class "st-key-<key>" mà Streamlit tự thêm vào div bọc ngoài
-        # (data-testid="stElementContainer") khi st.button() có tham số key= — ĐÃ XÁC
-        # NHẬN THẬT qua browser (kiểm tra outerHTML trực tiếp, 2026-09-18), KHÔNG đoán
-        # selector: đây là cơ chế CHÍNH THỨC của Streamlit dành riêng cho việc target CSS
-        # tùy chỉnh, ổn định hơn dựa vào nth-child/vị trí DOM. position: fixed đặt trên
-        # chính div.st-key-floating_chat_btn (không phải trên button) để cả div lẫn
-        # button bên trong cùng thoát khỏi luồng layout bình thường — đã verify qua
-        # screenshot thật: đứng yên đúng vị trí khi cuộn trang (scroll
-        # section[data-testid="stMain"], không phải window — quirk riêng của Streamlit).
-        elif st.session_state.get("view_mode") == "📊 Wind Turbine Dashboard":
-            st.markdown(
-                """
-                <style>
-                div.st-key-floating_chat_btn {
-                    position: fixed;
-                    bottom: 24px;
-                    right: 24px;
-                    z-index: 999;
-                }
-                div.st-key-floating_chat_btn button {
-                    width: 56px;
-                    height: 56px;
-                    border-radius: 50%;
-                    font-size: 24px;
-                    padding: 0;
-                    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-                }
-                </style>
-                """,
-                unsafe_allow_html=True,
-            )
-            if st.button("💬", key="floating_chat_btn", help="Hỏi nhanh"):
-                st.session_state.show_floating_chat = True
-
         st.divider()
 
         st.subheader("📚 Knowledge Base")
         try:
-            kb_count = count_documents()
+            kb_count, sources = _load_kb_sidebar_snapshot()
             st.success(f"{kb_count} đoạn tài liệu đã nạp")
         except Exception:
+            sources = []
             st.error("Chưa kết nối được ChromaDB. Chạy `python scripts/ingest_kb.py` trước.")
 
         if "last_kb_ingest" in st.session_state:
@@ -372,8 +336,7 @@ def render_sidebar():
 
         st.write("**Tài liệu đã nạp:**")
         try:
-            from rag.kb_manager import list_sources_with_chunk_counts, delete_document, add_document
-            sources = list_sources_with_chunk_counts()
+            from rag.kb_manager import delete_document, add_document
             for src in sources:
                 col_a, col_b = st.columns([4, 1])
                 icon = "⚠️ 📄" if src.get("is_orphan") else "📄"
@@ -383,6 +346,7 @@ def render_sidebar():
                 col_a.write(label)
                 if col_b.button("🗑️", key=f"del_{src['id']}"):
                     deleted = delete_document(src["id"])
+                    _load_kb_sidebar_snapshot.clear()
                     st.success(f"Đã xóa {deleted} đoạn từ '{src['title']}'")
                     st.rerun()
         except Exception as e:
@@ -402,6 +366,7 @@ def render_sidebar():
                         original_filename=kb_file.name,
                         title=kb_title,
                     )
+                    _load_kb_sidebar_snapshot.clear()
                     st.success(f"Đã nạp '{kb_title}': {result['chunk_count']} đoạn.")
                     st.session_state["last_kb_ingest"] = result
                     st.rerun()
@@ -2330,53 +2295,29 @@ def _render_kb_explorer_tab():
 
 
 def render_wind_turbine_dashboard():
-    # Thu tu 13 tab sap xep theo MACH LOGIC PHAN TICH (rong -> sau -> thoi gian -> xong
-    # xuoi -> cong cu phu), KHONG con theo thu tu them tab lich su nua — xem yeu cau
-    # "Bo cuc lai thu tu 13 tab" (2026-09). CHI hoan vi loi goi (danh sach st.tabs() +
-    # cac khoi "with tabN:"), KHONG doi bat ky gi ben trong than cac ham _render_*_tab().
-    #   Nhom 1 - Vao cuoc: Wind Farm Level, Overview theo Turbine
-    #   Nhom 2 - Power curve & phan loai: Power Curve, Power Curve & Trang Thai, Timeline
-    #   Nhom 3 - Theo thoi gian: Bien dong Power Curve theo Thoi gian, Runtime Analysis,
-    #            Time Series & Time Profile
-    #   Nhom 4 - Chan doan nguyen nhan: Cross-Analysis, Diagnostic
-    #   Nhom 5 - Du lieu tho & KPI: Tong quan, KPI Summary
-    #   Nhom 6 - Cong cu phu (khac domain han, de cuoi cung cho ro): KB Explorer
-    tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12 = st.tabs([
-        "🏭 Wind Farm Level", "🔍 Overview theo Turbine", "📈 Power Curve", "📈 Power Curve & Trạng Thái",
-        "🕐 Timeline", "🗓️ Biến động Power Curve theo Thời gian", "⏱️ Runtime Analysis",
-        "📉 Time Series & Time Profile", "🔀 Cross-Analysis", "🔍 Diagnostic", "📋 Tổng quan",
-        "📊 KPI Summary", "🗄️ KB Explorer",
-    ])
-    with tab0:
-        _render_wind_farm_level_tab()
-    with tab1:
-        _render_turbine_overview_tab()
-    with tab2:
-        _render_power_curve_tab()
-    with tab3:
-        _render_power_curve_classification_tab()
-    with tab4:
-        _render_timeline_tab()
-    with tab5:
-        _render_temporal_heatmap_tab()
-    with tab6:
-        _render_runtime_analysis_tab()
-    with tab7:
-        _render_timeseries_profile_tab()
-    with tab8:
-        _render_cross_analysis_tab()
-    with tab9:
-        _render_diagnostic_tab()
-    with tab10:
-        _render_overview_tab()
-    with tab11:
-        _render_kpi_summary_tab()
-    with tab12:
-        # Cong cu phu, khac domain han (duyet Knowledge Base RAG, khong phai phan tich
-        # turbine) — them 1 dong ngan de tach biet ro voi 12 tab phan tich phia truoc,
-        # KHONG doi gi ben trong _render_kb_explorer_tab().
+    dashboard_sections = {
+        "🏭 Wind Farm Level": _render_wind_farm_level_tab,
+        "🔍 Overview theo Turbine": _render_turbine_overview_tab,
+        "📈 Power Curve": _render_power_curve_tab,
+        "📈 Power Curve & Trạng Thái": _render_power_curve_classification_tab,
+        "🕐 Timeline": _render_timeline_tab,
+        "🗓️ Biến động Power Curve theo Thời gian": _render_temporal_heatmap_tab,
+        "⏱️ Runtime Analysis": _render_runtime_analysis_tab,
+        "📉 Time Series & Time Profile": _render_timeseries_profile_tab,
+        "🔀 Cross-Analysis": _render_cross_analysis_tab,
+        "🔍 Diagnostic": _render_diagnostic_tab,
+        "📋 Tổng quan": _render_overview_tab,
+        "📊 KPI Summary": _render_kpi_summary_tab,
+        "🗄️ KB Explorer": _render_kb_explorer_tab,
+    }
+    selected_section = st.selectbox(
+        "Khu vực phân tích",
+        list(dashboard_sections),
+        key="dashboard_section_select",
+    )
+    if selected_section == "🗄️ KB Explorer":
         st.caption("🔧 Công cụ phụ — khác domain phân tích turbine (duyệt Knowledge Base RAG)")
-        _render_kb_explorer_tab()
+    dashboard_sections[selected_section]()
 
 
 # Tu khoa nhan dien cau hoi CO THE lien quan turbine gio — GATE cho bridge/fallback-
@@ -2450,12 +2391,12 @@ def _bridge_wind_turbine_datasets_to_chat(question: str) -> None:
 
 
 def _handle_chat_question(question: str) -> None:
-    """Xử lý 1 câu hỏi chat — TÁI DÙNG bởi cả render_chat() (Chat mode) và dialog chat
-    nổi (_render_floating_chat_dialog(), Dashboard mode). Đọc/ghi ĐÚNG 1 nguồn lịch sử
-    chung st.session_state.chat_history — KHÔNG có lịch sử riêng cho dialog, để chuyển
-    qua lại giữa Chat mode và chat nổi không mất câu hỏi đã hỏi ở phía còn lại. Logic
-    NGUYÊN VẸN từ render_chat() trước khi tách hàm này (chat nổi, 2026-09) — không đổi
-    hành vi, chỉ đổi chỗ gọi."""
+    """Xử lý 1 câu hỏi chat — TÁI DÙNG bởi cả render_chat() (Chat mode) và drawer chat
+    (_render_side_chat_drawer(), Dashboard mode). Đọc/ghi ĐÚNG 1 nguồn lịch sử chung
+    st.session_state.chat_history — KHÔNG có lịch sử riêng cho drawer, để chuyển qua
+    lại giữa Chat mode và drawer không mất câu hỏi đã hỏi ở phía còn lại. Logic NGUYÊN
+    VẸN từ render_chat() trước khi tách hàm này (chat nổi, 2026-09) — không đổi hành
+    vi, chỉ đổi chỗ gọi."""
     st.session_state.chat_history.append({"role": "user", "content": question})
     with st.chat_message("user"):
         st.write(question)
@@ -2499,39 +2440,110 @@ def _handle_chat_question(question: str) -> None:
                     )
 
 
-def _close_floating_chat() -> None:
-    """on_dismiss callback (nút X / Esc / bấm ra ngoài dialog) — reset cờ show_floating_
-    chat để dialog KHÔNG tự mở lại ở lần rerun tiếp theo (xem lý do cần cờ này ở comment
-    main())."""
-    st.session_state.show_floating_chat = False
+@st.fragment
+def _render_side_chat_drawer() -> None:
+    """Drawer trượt cạnh phải cho Dashboard mode — THAY THẾ modal @st.dialog cũ (đối
+    xứng với "Câu hỏi mẫu" chỉ hiện ở Chat mode, xem render_sidebar()). Mặc định ĐÓNG,
+    không chiếm bề ngang chart — mở/đóng qua ĐÚNG 1 tab mỏng cố định cạnh phải màn hình
+    (đổi icon 💬/✕ theo trạng thái), KHÔNG dùng 2 nút riêng cho mở/đóng (bản thử trước
+    dùng nút đóng riêng trong header drawer — lý do quay lại 1 nút xem đoạn @st.fragment
+    bên dưới). TÁI DÙNG 100% st.session_state.chat_history + _handle_chat_question() —
+    KHÔNG có lịch sử/logic gọi agent riêng, giống hệt bản dialog cũ.
 
+    @st.fragment (KHÔNG phải @st.dialog) — cô lập rerun vào ĐÚNG hàm này khi tương tác
+    bên trong (bấm tab, gõ câu hỏi), KHÔNG kéo theo render_wind_turbine_dashboard() (13
+    tab, MỖI rerun tính lại TOÀN BỘ thân cả 13 tab — xem comment _render_power_curve_
+    tab()) phải chạy lại. Thiếu cô lập này (bản trước là hàm thường) đã gây 2 bug đo
+    THẬT: bấm tab "rất lâu sau và ấn nhiều lần mới hiện" (mỗi bấm tính lại 13 tab), và
+    hỏi trong drawer "không có câu trả lời, không báo lỗi" (agent.ask() cộng dồn với
+    tính 13 tab trong CÙNG 1 rerun, nghi vượt timeout). @st.dialog cũ CŨNG cô lập được
+    nhưng kéo theo quirk view_mode bị đọc nhầm (xem lịch sử git) — @st.fragment là cơ
+    chế hiện đại hơn cho ĐÚNG mục đích này, không có quirk đó.
 
-@st.dialog(
-    "💬 Hỏi nhanh (dùng chung lịch sử với Chat mode)", width="large", on_dismiss=_close_floating_chat,
-)
-def _render_floating_chat_dialog() -> None:
-    """Chat nổi cho Dashboard mode (13 tab) — TÁI DÙNG 100% st.session_state.chat_history
-    + _handle_chat_question() của Chat mode, KHÔNG viết logic gọi agent/lịch sử riêng.
-    Chỉ hiển thị 10 tin nhắn GẦN NHẤT (tránh dialog quá dài) — lịch sử ĐẦY ĐỦ vẫn nằm
-    nguyên trong st.session_state.chat_history, xem đủ khi chuyển sang Chat mode.
+    KHÔNG dùng st.rerun() (kể cả scope="fragment") để phản ánh trạng thái mới trong
+    CÙNG 1 lượt bấm — đã thử và lỗi thật: st.rerun(scope="fragment") ném
+    StreamlitAPIException ("can only be specified... during fragment reruns") khi gọi
+    ngay trong lượt xử lý click ĐẦU TIÊN của 1 widget mới trong fragment (xác nhận qua
+    source code Streamlit thật: streamlit/commands/execution_control.py::
+    _new_fragment_id_queue — raise khi ctx.fragment_ids_this_run rỗng, tức lượt hiện tại
+    Streamlit tính là "1 phần của full-app rerun" dù widget nằm trong fragment; ĐÃ xác
+    nhận lỗi này xảy ra thật cả khi chạy qua AppTest.from_file("app.py") — TOÀN BỘ app
+    thật, không phải hạn chế riêng của harness nhẹ). st.rerun() không scope (mặc định
+    scope="app") thì AN TOÀN nhưng lại rerun TOÀN BỘ trang — quay lại đúng vấn đề đang
+    tránh. Giải pháp: KHÔNG rerun gì cả — cập nhật thẳng biến local `is_open` ngay sau
+    khi set session_state, rồi TIẾP TỤC render phần còn lại của CHÍNH lượt này bằng giá
+    trị mới — khối <style> (quyết định drawer trượt vào/ra) được đặt SAU khi đã biết
+    is_open cuối cùng của lượt này, nên phản ánh đúng NGAY, không cần rerun.
 
-    Hàm này được gọi ở main() (KHÔNG phải render_sidebar()) — xem comment ở main() để
-    biết lý do: submit st.chat_input bên trong dialog gây ra 1 quirk thật của Streamlit
-    khiến rerun đó đọc nhầm view_mode về mặc định, nên việc gọi lại dialog không thể phụ
-    thuộc vào nhánh mode nào đang chạy."""
-    if not st.session_state.chat_history:
-        st.caption("Chưa có câu hỏi nào — hỏi ngay bên dưới.")
-    for msg in st.session_state.chat_history[-10:]:
-        with st.chat_message(msg["role"]):
-            st.write(msg["content"])
+    Vị trí/kích thước (width=380px, height=640px, tab tại top=50%) là hằng số cố định
+    — đã xác nhận hiển thị được (có nền đục, không xuyên chữ) qua ảnh chụp 2026-09-22,
+    nhưng CHƯA xác nhận lại bản @st.fragment này trên trình duyệt thật — cần người dùng
+    tự kiểm tra.
+    """
+    is_open = st.session_state.get("show_side_chat", False)
 
-    question = st.chat_input("Hỏi về dữ liệu đang xem...")
-    if question:
-        # KHONG can goi them st.rerun() — _handle_chat_question() da TU render inline
-        # (st.write()) trong CHINH lan chay nay, giong render_chat() (ngoai dialog) dang
-        # lam; lan goi lai dialog o rerun tiep theo da duoc dam bao boi cho show_floating_
-        # chat kiem tra o main(), khong phu thuoc ham nay tu goi rerun.
-        _handle_chat_question(question)
+    if st.button("✕" if is_open else "💬", key="side_chat_tab_btn", help="Hỏi nhanh"):
+        is_open = not is_open
+        st.session_state.show_side_chat = is_open
+
+    st.markdown(
+        f"""
+        <style>
+        div.st-key-side_chat_tab_btn {{
+            position: fixed !important;
+            top: 50%;
+            right: 0;
+            transform: translateY(-50%);
+            z-index: 2147483647 !important;
+            pointer-events: auto !important;
+        }}
+        div.st-key-side_chat_tab_btn button {{
+            width: 40px;
+            height: 96px;
+            border-radius: 8px 0 0 8px;
+            font-size: 20px;
+            padding: 0;
+            box-shadow: -2px 2px 8px rgba(0,0,0,0.3);
+            pointer-events: auto !important;
+            cursor: pointer;
+        }}
+        div.st-key-side_chat_drawer {{
+            position: fixed !important;
+            top: 70px;
+            right: {0 if is_open else -420}px;
+            width: 380px;
+            max-width: 90vw;
+            z-index: 999999998;
+            /* st.container KHÔNG tự có nền đục (background-color không kế thừa từ
+            ancestor trong CSS) — div này bị kéo ra khỏi luồng trang bằng position:fixed
+            nên thiếu nền tường minh nghĩa là NỘI DUNG PHÍA SAU XUYÊN QUA (bug thật đã
+            thấy qua ảnh chụp màn hình, 2026-09-22) — PHẢI set nền đục tường minh. */
+            background-color: var(--background-color, #ffffff);
+            color: var(--text-color, #262730);
+            box-shadow: -4px 0 16px rgba(0,0,0,0.25);
+            border-radius: 8px 0 0 8px;
+            transition: right 0.2s ease;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if not is_open:
+        return
+
+    with st.container(height=640, border=True, key="side_chat_drawer"):
+        st.subheader("💬 Hỏi nhanh")
+        st.caption("Dùng chung lịch sử với Chat mode.")
+        if not st.session_state.chat_history:
+            st.caption("Chưa có câu hỏi nào — hỏi ngay bên dưới.")
+        for msg in st.session_state.chat_history[-10:]:
+            with st.chat_message(msg["role"]):
+                st.write(msg["content"])
+
+        question = st.chat_input("Hỏi về dữ liệu đang xem...", key="side_chat_input")
+        if question:
+            _handle_chat_question(question)
 
 
 def render_chat():
@@ -2573,22 +2585,11 @@ def main():
         # an toan vi chat_input (trong render_chat()) khong bi long vao tabs.
         render_sidebar()
         render_wind_turbine_dashboard()
-
-    # QUAN TRỌNG — đã xác nhận THẬT qua browser (2026-09-18, debug print tạm đã gỡ):
-    # khi submit st.chat_input BÊN TRONG _render_floating_chat_dialog() (st.dialog), lần
-    # rerun do đó gây ra khiến st.sidebar.radio(key="view_mode") ĐỌC LẠI RA GIÁ TRỊ MẶC
-    # ĐỊNH ("💬 Chat") thay vì giá trị "📊 Wind Turbine Dashboard" đã chọn trước đó — một
-    # quirk thật của Streamlit (rerun bắt nguồn từ widget bên trong dialog không giữ đúng
-    # trạng thái widget bên ngoài dialog). Hậu quả: nếu chỉ gọi _render_floating_chat_
-    # dialog() trong nhánh "else" (Dashboard mode) như dự định ban đầu, dialog sẽ KHÔNG
-    # được gọi lại đúng lúc cần xử lý câu hỏi vừa gõ, câu hỏi bị mất. Vì vậy kiểm tra cờ
-    # show_floating_chat ở đây, SAU/ĐỘC LẬP với nhánh mode, KHÔNG phụ thuộc view_mode đọc
-    # đúng hay không. Đặt ở CUỐI main() (sau khi mọi widget khác — kể cả st.tabs() trong
-    # render_wind_turbine_dashboard() — đã render xong theo đúng thứ tự bình thường của
-    # chúng) thay vì đầu, để tránh xáo trộn thứ tự gọi của các widget không có key riêng
-    # (vd st.tabs()) — đặt trước đó từng gây tab bị reset về tab đầu tiên.
-    if st.session_state.get("show_floating_chat"):
-        _render_floating_chat_dialog()
+        # Drawer chat nổi — CHỈ Dashboard mode. Thứ tự gọi (trước/sau dashboard) KHÔNG
+        # còn quan trọng như 2 vòng debug trước (2026-09-22) — _render_side_chat_drawer()
+        # giờ là @st.fragment, tương tác bên trong (mở/đóng, hỏi) CHỈ rerun chính nó,
+        # không kéo theo render_wind_turbine_dashboard() nữa. Xem docstring hàm đó.
+        _render_side_chat_drawer()
 
 
 if __name__ == "__main__":
