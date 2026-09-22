@@ -136,7 +136,17 @@ class DatasetManager:
         nếu chưa load dataset nào)."""
         return self.get_dataframe()
 
-    def load_csv(self, path: str, name: str | None = None) -> None:
+    def load_csv(self, path: str, name: str | None = None, set_active: bool = True) -> None:
+        """set_active=True (mặc định, giữ NGUYÊN hành vi cũ cho mọi call site hiện có):
+        dataset vừa nạp trở thành active, tool nào không truyền dataset_name sẽ thao
+        tác trên đúng dataset này. set_active=False: thêm vào self._datasets như bình
+        thường nhưng KHÔNG đổi self._active_name — dùng khi nạp 1 dataset "nền" (vd
+        bridge từ Dashboard sang Chat) mà KHÔNG được phép cướp active của dataset user
+        đang thao tác (xem _bridge_wind_turbine_datasets_to_chat() trong app.py).
+        Edge case CỐ Ý: nếu manager đang RỖNG (_active_name=None) và set_active=False,
+        _active_name vẫn giữ None sau khi nạp (không tự động "nhận" active dù chưa có
+        active nào) — dataset đó tồn tại trong self._datasets nhưng get_dataframe(None)
+        sẽ raise RuntimeError cho tới khi có 1 lần nạp/switch với set_active=True."""
         delimiter = _detect_delimiter(path)
         df = pd.read_csv(path, sep=delimiter, encoding="utf-8-sig")
         df, source_column = derive_time_columns(df)
@@ -144,12 +154,15 @@ class DatasetManager:
         self._datasets[key] = df
         self._source_paths[key] = path
         self._datetime_source_columns[key] = source_column
-        self._active_name = key
+        if set_active:
+            self._active_name = key
 
-    def load_excel(self, path: str, sheet_name=0, name: str | None = None) -> None:
+    def load_excel(self, path: str, sheet_name=0, name: str | None = None, set_active: bool = True) -> None:
         """
         Load dữ liệu từ file Excel (.xlsx/.xls). Mặc định đọc sheet đầu tiên.
         sheet_name có thể là tên sheet (str) hoặc index (int).
+
+        set_active — xem docstring load_csv() (cùng ý nghĩa/edge case, KHÔNG lặp lại).
         """
         df = pd.read_excel(path, sheet_name=sheet_name)
         df, source_column = derive_time_columns(df)
@@ -157,15 +170,16 @@ class DatasetManager:
         self._datasets[key] = df
         self._source_paths[key] = path
         self._datetime_source_columns[key] = source_column
-        self._active_name = key
+        if set_active:
+            self._active_name = key
 
-    def add_dataframe(self, df: pd.DataFrame, name: str) -> None:
+    def add_dataframe(self, df: pd.DataFrame, name: str, set_active: bool = True) -> None:
         """Đăng ký 1 DataFrame ĐÃ CÓ SẴN trong bộ nhớ (vd đã load ở 1 DatasetManager
         khác) vào manager này, KHÔNG đọc lại từ file — dùng khi 1 dataset (vd người
-        dùng tự upload qua sidebar) cần dùng chung được ở nhiều DatasetManager instance
-        khác nhau trong cùng 1 session (xem app.py: st.session_state.dataset_manager
-        cho Chat vs st.session_state.wind_turbine_manager cho Dashboard — 2 instance
-        TÁCH RIÊNG có chủ đích, KHÔNG chia sẻ dataset tự động).
+        dùng tự upload qua sidebar, hoặc dataset turbine bridge từ Dashboard) cần dùng
+        chung được ở nhiều DatasetManager instance khác nhau trong cùng 1 session (xem
+        app.py: st.session_state.dataset_manager cho Chat vs st.session_state.
+        wind_turbine_manager cho Dashboard — 2 instance TÁCH RIÊNG có chủ đích).
 
         Vẫn gọi derive_time_columns() — AN TOÀN/idempotent (chỉ thêm cột còn thiếu,
         không ghi đè cột đã có, xem docstring derive_time_columns) — để đảm bảo dataset
@@ -175,12 +189,15 @@ class DatasetManager:
         source_path lưu None (dataset không xuất phát từ 1 file vật lý cụ thể TRONG
         manager này — get_datetime_source_column() vẫn hoạt động bình thường, chỉ
         get_source_path()-kiểu-method nào đó trong tương lai mới bị ảnh hưởng, hiện
-        chưa có method như vậy)."""
+        chưa có method như vậy).
+
+        set_active — xem docstring load_csv() (cùng ý nghĩa/edge case, KHÔNG lặp lại)."""
         df, source_column = derive_time_columns(df)
         self._datasets[name] = df
         self._source_paths[name] = None
         self._datetime_source_columns[name] = source_column
-        self._active_name = name
+        if set_active:
+            self._active_name = name
 
     def load_file(self, path: str, sheet_name=0, name: str | None = None) -> None:
         """

@@ -172,7 +172,49 @@ def test_switch_dataset_nonexistent_returns_false_keeps_active():
     m = DatasetManager()
     m.load_csv(SAMPLE_PATH, name="a.csv")
     assert m.switch_dataset("khong_ton_tai") is False
+
+
+def test_load_csv_set_active_false_keeps_existing_active():
+    """set_active=False khi manager ĐÃ có active — active KHÔNG đổi, dataset mới vẫn
+    được thêm vào (get_dataframe(tên đó) vẫn truy cập được bình thường)."""
+    m = DatasetManager()
+    m.load_csv(SAMPLE_PATH, name="a.csv")
     assert m.get_active_name() == "a.csv"
+
+    m.load_csv(SAMPLE_PATH, name="b.csv", set_active=False)
+
+    assert m.get_active_name() == "a.csv"
+    assert m.list_datasets() == ["a.csv", "b.csv"]
+    assert m.get_dataframe("b.csv") is not None
+
+
+def test_add_dataframe_set_active_false_keeps_existing_active():
+    """Cùng hành vi test_load_csv_set_active_false_keeps_existing_active nhưng qua
+    add_dataframe() — đây là method THẬT SỰ được dùng khi bridge turbine dataset."""
+    m = DatasetManager()
+    m.load_csv(SAMPLE_PATH, name="a.csv")
+    assert m.get_active_name() == "a.csv"
+
+    other_df = pd.DataFrame({"colA": [1, 2], "colB": [3, 4]})
+    m.add_dataframe(other_df, name="b.csv", set_active=False)
+
+    assert m.get_active_name() == "a.csv"
+    assert m.list_datasets() == ["a.csv", "b.csv"]
+
+
+def test_load_csv_set_active_false_on_empty_manager_keeps_active_none():
+    """Edge case CỐ Ý (xem docstring load_csv()): manager rỗng (active=None) + nạp với
+    set_active=False -> active vẫn None sau đó, dataset tồn tại nhưng
+    get_dataframe(None) vẫn raise RuntimeError cho tới khi có 1 lần nạp/switch active
+    thật — KHÔNG tự động "nhận" active dù đó là dataset đầu tiên."""
+    m = DatasetManager()
+    m.load_csv(SAMPLE_PATH, name="only.csv", set_active=False)
+
+    assert m.get_active_name() is None
+    assert m.list_datasets() == ["only.csv"]
+    assert m.get_dataframe("only.csv") is not None
+    with pytest.raises(RuntimeError):
+        m.get_dataframe()
 
 
 def test_load_csv_auto_detects_semicolon_delimiter_with_bom(tmp_path):
