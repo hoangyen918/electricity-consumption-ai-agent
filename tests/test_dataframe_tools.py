@@ -282,18 +282,41 @@ def test_aggregate_metric_with_explicit_dataset_name(tmp_path):
     assert result_file1["ok"] is True
 
 
-def test_aggregate_metric_without_dataset_name_uses_active(tmp_path):
-    """Không truyền dataset_name -> dùng active (file load gần nhất), giữ backward compat."""
+def test_aggregate_metric_without_dataset_name_uses_active_when_single_dataset():
+    """CHỈ 1 dataset đang tải -> không truyền dataset_name vẫn dùng active, giữ
+    backward compat (guard mới ở _require_dataset_name_if_ambiguous chỉ chặn khi >1
+    dataset — xem test_aggregate_metric_without_dataset_name_fails_when_ambiguous
+    ngay dưới cho trường hợp NGƯỢC LẠI, đã đổi hành vi có chủ đích)."""
+    m = DatasetManager()
+    m.load_csv(SAMPLE_PATH, name="file1.csv")
+
+    result = aggregate_metric(m, column="zone_1_consumption", aggregation="mean")
+    assert result["ok"] is True
+
+
+def test_aggregate_metric_without_dataset_name_fails_when_ambiguous(tmp_path):
+    """ĐỔI HÀNH VI có chủ đích (audit "Hợp nhất wind_turbine_manager/dataset_manager",
+    2026-09): trước đây >1 dataset + không truyền dataset_name sẽ ÂM THẦM dùng active
+    (file load gần nhất) — đây chính là lỗ hổng khiến 1 câu hỏi có thể trả lời SAI
+    dataset mà không báo lỗi nếu active bị đổi bởi nguồn khác. Guard mới
+    (_require_dataset_name_if_ambiguous, mirror hệt guard đã có ở turbine tool) chặn
+    CỨNG ngay khi phát hiện ambiguous, bắt LLM phải tự chỉ định rõ."""
     other_csv = tmp_path / "file2.csv"
     other_csv.write_text("value\n10\n20\n30\n", encoding="utf-8")
 
     m = DatasetManager()
     m.load_csv(SAMPLE_PATH, name="file1.csv")
-    m.load_csv(str(other_csv), name="file2.csv")  # active = file2.csv
+    m.load_csv(str(other_csv), name="file2.csv")  # active = file2.csv, nhưng có 2 dataset
 
     result = aggregate_metric(m, column="value", aggregation="mean")
-    assert result["ok"] is True
-    assert result["data"]["value"] == pytest.approx(20.0)
+    assert result["ok"] is False
+    assert "PHẢI chỉ định rõ dataset_name" in result["error"]
+    assert "file1.csv" in result["error"] and "file2.csv" in result["error"]
+
+    # Vẫn hoạt động bình thường nếu chỉ định rõ dataset_name (guard không chặn oan)
+    result_explicit = aggregate_metric(m, column="value", aggregation="mean", dataset_name="file2.csv")
+    assert result_explicit["ok"] is True
+    assert result_explicit["data"]["value"] == pytest.approx(20.0)
 
 
 def test_aggregate_metric_unknown_dataset_name_fails_clearly(manager):

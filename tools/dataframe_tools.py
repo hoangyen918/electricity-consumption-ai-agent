@@ -23,6 +23,29 @@ def _dataset_not_found(manager: DatasetManager, dataset_name: str) -> str:
     )
 
 
+def _require_dataset_name_if_ambiguous(manager: DatasetManager, dataset_name: str | None) -> str | None:
+    """GUARD CỨNG — mirror agent/turbine_tool_wrappers.py::resolve_power_wind_columns
+    (audit "Hợp nhất wind_turbine_manager/dataset_manager", 2026-09, xác nhận grep toàn
+    repo: guard này TRƯỚC ĐÓ chỉ tồn tại cho turbine tool, KHÔNG có ở đây — lỗ hổng
+    thật). Cùng lý do gốc: LLM đôi khi bỏ qua hướng dẫn system prompt (chỉ định
+    dataset_name khi có >1 dataset) và gọi tool KHÔNG chỉ định, khiến tool ngầm chạy
+    trên dataset "active" hiện tại (get_dataframe(None), xem DatasetManager) — có thể
+    SAI nếu active không phải dataset người dùng thực sự muốn hỏi. Không chặn
+    get_dataset_summary() (dataset_name=None ở đó có nghĩa khác: "liệt kê TẤT CẢ dataset",
+    xem docstring get_dataset_summary — chặn ở đó sẽ phá luôn cơ chế discovery của agent).
+
+    Trả None nếu <=1 dataset đang tải hoặc dataset_name đã được chỉ định rõ (không chặn
+    gì, hành vi cũ giữ nguyên khi chỉ có 1 dataset — vẫn đúng ý "If dataset_name is
+    omitted, tools operate on the most recently uploaded dataset" trong prompts.py khi
+    không có gì để nhầm lẫn)."""
+    if dataset_name is None and len(manager.list_datasets()) > 1:
+        return (
+            "Có nhiều hơn 1 dataset đang được tải — PHẢI chỉ định rõ dataset_name (không "
+            f"để trống) khi gọi tool này. Các dataset hiện có: {manager.list_datasets()}"
+        )
+    return None
+
+
 def _validate_aggregation(aggregation: str) -> str | None:
     if aggregation not in AGGREGATION_WHITELIST:
         return f"Aggregation '{aggregation}' not allowed. Valid aggregations are: {AGGREGATION_WHITELIST}"
@@ -129,6 +152,10 @@ def aggregate_metric(
     dataset_name: str | None = None,
 ) -> dict:
     try:
+        ambiguous_error = _require_dataset_name_if_ambiguous(manager, dataset_name)
+        if ambiguous_error:
+            return failure(ambiguous_error)
+
         df = manager.get_dataframe(dataset_name)
         if df is None:
             return failure(_dataset_not_found(manager, dataset_name))
@@ -185,6 +212,10 @@ def group_metric(
     dataset_name: str | None = None,
 ) -> dict:
     try:
+        ambiguous_error = _require_dataset_name_if_ambiguous(manager, dataset_name)
+        if ambiguous_error:
+            return failure(ambiguous_error)
+
         df = manager.get_dataframe(dataset_name)
         if df is None:
             return failure(_dataset_not_found(manager, dataset_name))
@@ -226,6 +257,10 @@ def find_peak(
     manager: DatasetManager, column: str, mode: str = "max", dataset_name: str | None = None,
 ) -> dict:
     try:
+        ambiguous_error = _require_dataset_name_if_ambiguous(manager, dataset_name)
+        if ambiguous_error:
+            return failure(ambiguous_error)
+
         df = manager.get_dataframe(dataset_name)
         if df is None:
             return failure(_dataset_not_found(manager, dataset_name))
@@ -273,6 +308,10 @@ def compare_periods(
     dataset_name: str | None = None,
 ) -> dict:
     try:
+        ambiguous_error = _require_dataset_name_if_ambiguous(manager, dataset_name)
+        if ambiguous_error:
+            return failure(ambiguous_error)
+
         df = manager.get_dataframe(dataset_name)
         if df is None:
             return failure(_dataset_not_found(manager, dataset_name))
@@ -355,6 +394,10 @@ def calculate_correlation(
     dataset_name: str | None = None,
 ) -> dict:
     try:
+        ambiguous_error = _require_dataset_name_if_ambiguous(manager, dataset_name)
+        if ambiguous_error:
+            return failure(ambiguous_error)
+
         df = manager.get_dataframe(dataset_name)
         if df is None:
             return failure(_dataset_not_found(manager, dataset_name))
