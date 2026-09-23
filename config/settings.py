@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     chat_base_url: str = ""
     chat_api_key: str = ""
     embedding_model: str = "openai/text-embedding-3-small"
+    # base_url: endpoint embedding LOCAL (Ollama-native /api/embed, KHÁC format
+    # OpenAI-compatible) — đổi 2026-09-22 sang bge-m3 local vì OPENROUTER_API_KEY hết
+    # hạn (401) VÀ để không tốn phí. Rỗng "" nếu chưa cấu hình local embedding.
+    embedding_base_url: str = ""
     chroma_path: str = "storage/chroma"
     chroma_collection: str = "electricity_kb"
     max_agent_iterations: int = 5
@@ -57,5 +61,5 @@ class Settings(BaseSettings):
         if not self.chat_api_key:
             self.chat_api_key = self.openrouter_api_key
         return self
-
 SETTINGS = Settings()
+print(f"SETTINGS.: {SETTINGS.embedding_model}")

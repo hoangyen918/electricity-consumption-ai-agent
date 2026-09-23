@@ -1,39 +1,40 @@
-"""Gọi embedding model qua OpenRouter, có batching và retry."""
-import time
-from openai import OpenAI
-from config.settings import SETTINGS
+"""Gọi embedding model qua Ollama-native API (local, /api/embed), có batching và retry.
 
-_client = OpenAI(
-    base_url=SETTINGS.openrouter_base_url,
-    api_key=SETTINGS.openrouter_api_key,
-)
+Đổi 2026-09-22 từ OpenRouter (openai/text-embedding-3-small) sang local bge-m3 qua
+Ollama — xem config/settings.py:base_url và DATA_SOURCES.md. Response shape khác OpenAI:
+{"embeddings": [[...], ...], "prompt_eval_count": N}, không phải {"data": [{"embedding": [...]}]}.
+"""
+import time
+import requests
+from config.settings import SETTINGS
 
 BATCH_SIZE = 100
 MAX_RETRIES = 3
 RETRY_BACKOFF_SECONDS = 2  # nhân đôi mỗi lần retry: 2s, 4s (chỉ chờ giữa các lần thử, không chờ sau lần cuối)
+TIMEOUT_SECONDS = 120  # batch 100 chunks trên local server có thể chậm hơn API cloud
 
 
 def _embed_batch(texts: list[str], usage_accumulator: list[int] | None = None) -> list[list[float]]:
     """Gọi API cho 1 batch, có retry với exponential backoff.
 
-    usage_accumulator: nếu truyền vào, token count của LẦN GỌI THÀNH CÔNG được append
-    vào đây (không cộng dồn các lần retry fail trước đó, vì append nằm ngay trước
-    return trong nhánh try — chỉ chạy tới được khi request thành công).
+    usage_accumulator: nếu truyền vào, token count (prompt_eval_count) của LẦN GỌI
+    THÀNH CÔNG được append vào đây (không cộng dồn các lần retry fail trước đó, vì
+    append nằm ngay trước return trong nhánh try — chỉ chạy tới được khi request
+    thành công).
     """
     last_error = None
     for attempt in range(MAX_RETRIES):
         try:
-            response = _client.embeddings.create(
-                model=SETTINGS.embedding_model,
-                input=texts,
-                extra_headers={
-                    "HTTP-Referer": SETTINGS.app_referer,
-                    "X-Title": SETTINGS.app_title,
-                },
+            response = requests.post(
+                SETTINGS.embedding_base_url,
+                json={"model": SETTINGS.embedding_model, "input": texts},
+                timeout=TIMEOUT_SECONDS,
             )
-            if usage_accumulator is not None and response.usage is not None:
-                usage_accumulator.append(response.usage.total_tokens)
-            return [item.embedding for item in response.data]
+            response.raise_for_status()
+            payload = response.json()
+            if usage_accumulator is not None and "prompt_eval_count" in payload:
+                usage_accumulator.append(payload["prompt_eval_count"])
+            return payload["embeddings"]
         except Exception as e:
             last_error = e
             if attempt < MAX_RETRIES - 1:
@@ -51,7 +52,7 @@ def embed_texts(
     Embed danh sách text, tự động chia batch để tránh request quá lớn.
     Trả về list embedding vectors, CÙNG THỨ TỰ với input texts.
 
-    usage_accumulator: nếu truyền vào, token count thật (từ response.usage) của mỗi
+    usage_accumulator: nếu truyền vào, token count thật (prompt_eval_count) của mỗi
     batch được append vào đây — tổng lại (sum) để có total token đã dùng.
     """
     if not texts:
