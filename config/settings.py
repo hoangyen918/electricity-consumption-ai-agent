@@ -16,9 +16,10 @@ class Settings(BaseSettings):
     chat_base_url: str = ""
     chat_api_key: str = ""
     embedding_model: str = "openai/text-embedding-3-small"
-    # base_url: endpoint embedding LOCAL (Ollama-native /api/embed, KHÁC format
-    # OpenAI-compatible) — đổi 2026-09-22 sang bge-m3 local vì OPENROUTER_API_KEY hết
-    # hạn (401) VÀ để không tốn phí. Rỗng "" nếu chưa cấu hình local embedding.
+    # embedding_base_url: endpoint embedding self-hosted qua docker-compose.yml (service
+    # "embeddings", TEI, OpenAI-compatible /v1/embeddings) — đổi 2026-09-23 sau khi 3
+    # provider khác lần lượt fail trong buổi (OpenRouter key hết hạn, Ollama LAN treo,
+    # TEI công ty 74bt.ats.com.vn không phản hồi). Rỗng "" nếu chưa cấu hình.
     embedding_base_url: str = ""
     chroma_path: str = "storage/chroma"
     chroma_collection: str = "electricity_kb"
