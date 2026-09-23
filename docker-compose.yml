@@ -3,8 +3,38 @@ services:
     build: .
     ports: ["8501:8501"]
     env_file: .env
+    environment:
+      # Override .env's host-facing EMBEDDING_BASE_URL (127.0.0.1, for host-run
+      # scripts like scripts/ingest_kb.py) — inside this container, the embeddings
+      # service is reachable by its Compose service name, not via the host loopback.
+      - EMBEDDING_BASE_URL=http://embeddings:8000/v1
+    depends_on:
+      embeddings:
+        condition: service_healthy
     volumes:
       - ./storage/chroma:/app/storage/chroma
       - ./logs:/app/logs
       - ./kb/raw:/app/kb/raw
       - ./data/processed:/app/data/processed
+
+  embeddings:
+    image: hwdsl2/embeddings-server
+    container_name: embeddings
+    restart: always
+    environment:
+      - EMBED_MODEL=BAAI/bge-m3
+      - EMBED_API_KEY=          # rỗng = tắt auth, chạy nội bộ trong Docker network
+    volumes:
+      - embeddings-data:/var/lib/embeddings
+    ports:
+      - "127.0.0.1:8000:8000"   # host-only (ingest_kb.py, curl debug) — KHÔNG publish ra LAN
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/info"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 300s        # lần đầu phải tải model ~570MB
+
+volumes:
+  embeddings-data:
+    name: embeddings-data
