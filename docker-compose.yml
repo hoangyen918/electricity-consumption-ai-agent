@@ -29,7 +29,7 @@ services:
     # đỉnh CPU/RAM còn dư nhiều. Tên flag xác nhận bằng `--help` của chính image này,
     # không suy từ bản cũ: --max-batch-tokens (default 16384), --max-concurrent-requests
     # (default 512).
-    command: --model-id BAAI/bge-m3 --max-batch-tokens 2048 --max-concurrent-requests 4
+    command: --model-id BAAI/bge-m3 --max-batch-tokens 2048 --max-concurrent-requests 16
     volumes:
       # Image set sẵn HUGGINGFACE_HUB_CACHE=/data (khác wrapper cũ dùng
       # /var/lib/embeddings) — vẫn trỏ về ĐÚNG volume cũ để tái dùng model đã tải.
