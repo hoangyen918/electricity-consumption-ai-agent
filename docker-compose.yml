@@ -6,8 +6,9 @@ services:
     environment:
       # Override .env's host-facing EMBEDDING_BASE_URL (127.0.0.1, for host-run
       # scripts like scripts/ingest_kb.py) — inside this container, the embeddings
-      # service is reachable by its Compose service name, not via the host loopback.
-      - EMBEDDING_BASE_URL=http://embeddings:8000/v1
+      # service is reachable by its Compose service name, and on TEI's INTERNAL
+      # port 80 (the 8000 in .env is the host-published port, not the container's).
+      - EMBEDDING_BASE_URL=http://embeddings:80/v1
     depends_on:
       embeddings:
         condition: service_healthy
@@ -18,22 +19,31 @@ services:
       - ./data/processed:/app/data/processed
 
   embeddings:
-    image: hwdsl2/embeddings-server
+    # TEI gốc thay cho wrapper hwdsl2/embeddings-server: wrapper KHÔNG expose
+    # --max-batch-tokens qua env var, mà mặc định 16384 của TEI là nghi phạm chính
+    # khiến warm-up bge-m3 ăn 793% CPU / 11.6GB RAM rồi bị cắt ở 300s (2026-09-23).
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest
     container_name: embeddings
     restart: always
-    environment:
-      - EMBED_MODEL=BAAI/bge-m3
-      - EMBED_API_KEY=          # rỗng = tắt auth, chạy nội bộ trong Docker network
+    # 2048/4 là điểm khởi đầu THẬN TRỌNG, chưa phải số cuối — nâng dần nếu đo thấy
+    # đỉnh CPU/RAM còn dư nhiều. Tên flag xác nhận bằng `--help` của chính image này,
+    # không suy từ bản cũ: --max-batch-tokens (default 16384), --max-concurrent-requests
+    # (default 512).
+    command: --model-id BAAI/bge-m3 --max-batch-tokens 2048 --max-concurrent-requests 4
     volumes:
-      - embeddings-data:/var/lib/embeddings
+      # Image set sẵn HUGGINGFACE_HUB_CACHE=/data (khác wrapper cũ dùng
+      # /var/lib/embeddings) — vẫn trỏ về ĐÚNG volume cũ để tái dùng model đã tải.
+      - embeddings-data:/data
     ports:
-      - "127.0.0.1:8000:8000"   # host-only (ingest_kb.py, curl debug) — KHÔNG publish ra LAN
+      # TEI nghe cổng 80 trong container (image set sẵn PORT=80); 8000 là cổng phía
+      # host, host-only — KHÔNG publish ra LAN.
+      - "127.0.0.1:8000:80"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/info"]
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 300s        # lần đầu phải tải model ~570MB
+      start_period: 300s
 
 volumes:
   embeddings-data:
