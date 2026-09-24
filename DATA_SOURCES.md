@@ -534,6 +534,35 @@ Now xfailed in `tests/test_retriever.py` (same pattern as case 1) rather than le
 failing — the bare-retrieval gap is real and worth tracking, but it does not reflect
 production behavior, which is independently verified correct.
 
+### Post-migration verification — 5/5 checks PASS (2026-09-24)
+
+After the embedding migration (OpenRouter -> Ollama -> company TEI -> self-hosted TEI,
+all above) and its follow-up fixes, ran a full verification pass before considering the
+migration done:
+
+1. **Full regression suite**: 320 passed, 5 failed, 1 xfailed. All 5 failures accounted
+   for: 1 pre-existing flaky test (`test_agent.py::test_gate_1_simple_data_question`,
+   passes in isolation, documented above under "tests/test_agent.py flaky..."), 1 known
+   xfail (case 1, retriever), 3 genuinely new failures traced to a hardcoded 1536-dim
+   fixture in `tests/test_kb_manager.py` (fixed — see that file's git history) — 0
+   unexplained failures.
+2. **`CHAT_BASE_URL` with the real key**: `curl .../v1/models` with
+   `Authorization: Bearer $CHAT_API_KEY` returns HTTP 200 with a model list that
+   includes `CHAT_MODEL` (`ag/gpt-oss-120b-medium`) — tunnel and key both confirmed
+   healthy, not just "not 530."
+3. **`evals/run_evals.py` baseline-overwrite guard**: patched (`_is_infra_failure()` +
+   `_save_baseline_with_guard()`, `--force-save-baseline` flag) and unit-tested (4 tests
+   in `tests/test_run_evals_baseline_guard.py`) — see git history for the incident this
+   fixes.
+4. **Real `kb_qa` eval run** (14/14 cases, via the now-guarded harness): 100% accuracy,
+   Recall@5=92.9%, Recall@10=92.9%, MRR=0.7917, citation correctness=85.7%. Old
+   85.71%/76.19% numbers are from the previous model/corpus, trend reference only, not
+   a direct comparison. Case `kb_002` (the one xfailed above at the bare-retrieval
+   level) passed here with rank=1.
+5. **Real Chat UI smoke test** (`tests/test_chat_kb_smoke.py`, no mocking): asks 1
+   known-answer `kb_qa` question through the actual `app._handle_chat_question()` path
+   end to end (real embedding + real chat model) — passes, correct citation.
+
 ### Lưu ý chi phí — chạy test có chọn lọc, không luôn full suite
 
 `tests/test_agent.py` và `tests/test_security.py` gọi API thật (không mock). Full suite
@@ -542,3 +571,11 @@ chạy sau mỗi sửa lỗi nhỏ lẻ tẻ. Với sửa nhỏ, chỉ chạy đ
 `pytest tests/test_dataset_manager.py -v`). Full suite chạy lặp lại nhiều lần trong 1 ngày
 làm việc dài là nguồn tốn credit API âm thầm, dễ bị bỏ sót vì mỗi lần trông rẻ nhưng cộng
 dồn lớn.
+
+Cũng gọi API thật (thêm từ đợt đổi embedding 2026-09-22/24): `tests/test_retriever.py`
+(embedding), `tests/test_kb_manager.py` (1 lần `embed_query()` ở module-level tính
+`EMBEDDING_DIM`), và **`tests/test_chat_kb_smoke.py`** (embedding + chat model thật qua
+toàn bộ đường Chat UI, không mock gì — xem docstring đầu file). Project chưa có
+`pytest.ini`/`conftest.py`/`pyproject.toml` nào (đã kiểm tra 2026-09-24) nên các file này
+KHÔNG có `@pytest.mark` riêng để loại trừ — muốn bỏ qua khi chạy full suite, dùng
+`--ignore=tests/test_chat_kb_smoke.py` theo path, không phải marker.
