@@ -1,56 +1,56 @@
 {
-  "timestamp": "2026-09-16T03:50:33.481397+00:00",
-  "total_cases": 58,
-  "passed": 52,
-  "overall_accuracy": 0.8966,
-  "accuracy": 0.8966,
+  "timestamp": "2026-09-24T04:51:55.153477+00:00",
+  "total_cases": 59,
+  "passed": 53,
+  "overall_accuracy": 0.8983,
+  "accuracy": 0.8983,
   "retrieval": {
     "n_cases_with_gold_evidence": 21,
-    "recall_at_5": 0.9048,
-    "recall_at_10": 0.9048,
-    "mrr": 0.5968,
-    "citation_correctness_rate": 0.7619,
+    "recall_at_5": 0.9524,
+    "recall_at_10": 0.9524,
+    "mrr": 0.7238,
+    "citation_correctness_rate": 0.7143,
     "per_case": [
       {
         "id": "kb_001",
         "recall_5": true,
         "recall_10": true,
         "rank": 1,
-        "citation_correct": true
+        "citation_correct": false
       },
       {
         "id": "kb_002",
-        "recall_5": false,
-        "recall_10": false,
-        "rank": null,
+        "recall_5": true,
+        "recall_10": true,
+        "rank": 5,
         "citation_correct": false
       },
       {
         "id": "kb_003",
         "recall_5": true,
         "recall_10": true,
-        "rank": 3,
-        "citation_correct": false
+        "rank": 2,
+        "citation_correct": true
       },
       {
         "id": "kb_004",
         "recall_5": true,
         "recall_10": true,
-        "rank": 3,
+        "rank": 4,
         "citation_correct": false
       },
       {
         "id": "kb_005",
         "recall_5": true,
         "recall_10": true,
-        "rank": 2,
+        "rank": 1,
         "citation_correct": true
       },
       {
         "id": "kb_006",
         "recall_5": true,
         "recall_10": true,
-        "rank": 2,
+        "rank": 1,
         "citation_correct": true
       },
       {
@@ -58,7 +58,7 @@
         "recall_5": true,
         "recall_10": true,
         "rank": 1,
-        "citation_correct": true
+        "citation_correct": false
       },
       {
         "id": "kb_008",
@@ -85,7 +85,7 @@
         "id": "kb_011",
         "recall_5": true,
         "recall_10": true,
-        "rank": 2,
+        "rank": 1,
         "citation_correct": true
       },
       {
@@ -100,13 +100,13 @@
         "recall_5": true,
         "recall_10": true,
         "rank": 1,
-        "citation_correct": true
+        "citation_correct": false
       },
       {
         "id": "kb_014",
         "recall_5": true,
         "recall_10": true,
-        "rank": 3,
+        "rank": 1,
         "citation_correct": true
       },
       {
@@ -127,21 +127,21 @@
         "id": "both_003",
         "recall_5": true,
         "recall_10": true,
-        "rank": 5,
+        "rank": 4,
         "citation_correct": true
       },
       {
         "id": "both_004",
         "recall_5": true,
         "recall_10": true,
-        "rank": 2,
-        "citation_correct": false
+        "rank": 3,
+        "citation_correct": true
       },
       {
         "id": "both_005",
         "recall_5": true,
         "recall_10": true,
-        "rank": 2,
+        "rank": 3,
         "citation_correct": true
       },
       {
@@ -155,7 +155,7 @@
         "id": "both_007",
         "recall_5": true,
         "recall_10": true,
-        "rank": 2,
+        "rank": 1,
         "citation_correct": true
       }
     ],
@@ -164,15 +164,15 @@
         "n_cases": 7,
         "recall_at_5": 1.0,
         "recall_at_10": 1.0,
-        "mrr": 0.6714,
-        "citation_correctness_rate": 0.8571
+        "mrr": 0.7024,
+        "citation_correctness_rate": 1.0
       },
       "kb_qa": {
         "n_cases": 14,
-        "recall_at_5": 0.8571,
-        "recall_at_10": 0.8571,
-        "mrr": 0.5595,
-        "citation_correctness_rate": 0.7143
+        "recall_at_5": 0.9286,
+        "recall_at_10": 0.9286,
+        "mrr": 0.7345,
+        "citation_correctness_rate": 0.5714
       }
     }
   },
@@ -184,8 +184,8 @@
     },
     "group_compare": {
       "total": 8,
-      "passed": 8,
-      "accuracy": 1.0
+      "passed": 7,
+      "accuracy": 0.875
     },
     "multi_step": {
       "total": 5,
@@ -218,9 +218,9 @@
       "accuracy": 1.0
     },
     "turbine_qa": {
-      "total": 5,
-      "passed": 3,
-      "accuracy": 0.6
+      "total": 6,
+      "passed": 5,
+      "accuracy": 0.8333
     }
   },
   "categories": {
@@ -231,8 +231,8 @@
     },
     "group_compare": {
       "total": 8,
-      "passed": 8,
-      "accuracy": 1.0
+      "passed": 7,
+      "accuracy": 0.875
     },
     "multi_step": {
       "total": 5,
@@ -265,25 +265,25 @@
       "accuracy": 1.0
     },
     "turbine_qa": {
-      "total": 5,
-      "passed": 3,
-      "accuracy": 0.6
+      "total": 6,
+      "passed": 5,
+      "accuracy": 0.8333
     }
   },
-  "total_cost_usd": 9e-06,
-  "average_latency_ms": 35740.7,
+  "total_cost_usd": 0,
+  "average_latency_ms": 19295.2,
   "tool_selection_correctness": {
-    "n_cases_with_expected_tool": 5,
-    "rate": 0.6,
+    "n_cases_with_expected_tool": 6,
+    "rate": 0.8333,
     "per_case": [
       {
         "id": "turbine_001",
         "expected_tool": "clean_missing_values",
         "tool_names": [
           "get_dataset_summary",
-          "clean_missing_values"
+          "calculate"
         ],
-        "correct": true
+        "correct": false
       },
       {
         "id": "turbine_002",
@@ -306,14 +306,31 @@
       {
         "id": "turbine_004",
         "expected_tool": "predict_power",
-        "tool_names": [],
-        "correct": null
+        "tool_names": [
+          "get_dataset_summary",
+          "predict_power"
+        ],
+        "correct": true
       },
       {
         "id": "turbine_005",
         "expected_tool": "group_anomaly_windows",
-        "tool_names": [],
-        "correct": null
+        "tool_names": [
+          "get_dataset_summary",
+          "group_anomaly_windows",
+          "group_anomaly_windows",
+          "group_anomaly_windows"
+        ],
+        "correct": true
+      },
+      {
+        "id": "turbine_006",
+        "expected_tool": "calculate_turbine_kpis",
+        "tool_names": [
+          "get_dataset_summary",
+          "calculate_turbine_kpis"
+        ],
+        "correct": true
       }
     ]
   },
