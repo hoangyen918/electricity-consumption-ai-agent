@@ -4,7 +4,9 @@ ghi kết quả chi tiết + tổng kết ra evals/results/.
 
 Chạy: python evals/run_evals.py
 """
+import argparse
 import re
+import shutil
 import sys
 import json
 from pathlib import Path
@@ -54,6 +56,101 @@ THRESHOLDS = {
     "recall_at_10_min": 0.80,
     "mrr_min": 0.55,
 }
+
+# Guard ghi đè baseline (2026-09-24) — sự cố thật: 1 lần chạy 14/14 case fail vì
+# CHAT_BASE_URL trả HTTP 530 (tunnel chết) đã ghi đè evals/baselines/v1_baseline.json
+# thật (58 case, 89.66% accuracy, 2026-09-16) bằng kết quả 0% của lần fail đó — phải
+# revert tay bằng git checkout. Guard này chặn tái diễn.
+#
+# Tỷ lệ 30%: phân bố THẬT quan sát được là NHỊ PHÂN, không có case trung gian — 1 lần
+# hạ tầng chết hoàn toàn cho ra 14/14 = 100% case fail vì lỗi hạ tầng; mọi lần hạ tầng
+# sống, case fail (nếu có) là do logic/retrieval kém, KHÔNG khớp pattern hạ tầng nào
+# (0%). 30% có biên độ an toàn rộng với cả 2 tình huống thật đã gặp, không sát mép.
+INFRA_FAIL_THRESHOLD = 0.30
+
+# Pattern lỗi HẠ TẦNG (không phải logic fail: sai câu trả lời/retrieval kém) ĐÃ THẬT
+# gặp trong ngày 2026-09-22/24 — xem DATA_SOURCES.md mục "Embedding model migration".
+# KHÔNG thêm pattern mới ngoài những gì đã thực sự gặp:
+INFRA_ERROR_PATTERNS = [
+    # services/openrouter_client.py:FRIENDLY_CONNECTION_ERROR_MESSAGE — message thân
+    # thiện khi CHAT_BASE_URL trả HTML lỗi (Cloudflare 530, sáng 2026-09-24).
+    r"không thể kết nối tới máy chủ ai",
+    # OPENROUTER_API_KEY hết hạn, quan sát thật qua scripts/inspect_chroma.py
+    # (2026-09-22): "Error code: 401 - {'error': {'message': 'API key expired'...}".
+    r"api key expired",
+    # Cùng format lỗi thật của openai-python SDK ("Error code: NNN - {...}") — áp dụng
+    # cho 401/403/5xx như yêu cầu, không phải pattern mới, chỉ khái quát digit trong
+    # ĐÚNG format đã quan sát.
+    r"error code:\s*(401|403|5\d\d)",
+    # Ollama server treo giữa ingest (2026-09-22, batch 31/63) — 3 dòng log retry thật
+    # trong rag/embeddings.py: "Read timed out", "Connection aborted...
+    # ConnectionResetError...forcibly closed", và curl riêng thấy "Connection reset".
+    r"\btimed out\b",
+    r"connection aborted",
+    r"forcibly closed",
+    r"connection reset",
+]
+
+
+def _is_infra_failure(exception_text: str) -> bool:
+    """True nếu exception_text khớp 1 pattern lỗi HẠ TẦNG đã biết (KHÔNG phải logic
+    fail như sai câu trả lời/retrieval kém) — dùng để guard ghi đè baseline, xem
+    _save_baseline_with_guard()."""
+    text = exception_text.lower()
+    return any(re.search(p, text) for p in INFRA_ERROR_PATTERNS)
+
+
+def _save_baseline_with_guard(
+    summary: dict,
+    all_results: list[dict],
+    total: int,
+    ts: str,
+    force_save_baseline: bool,
+    baselines_dir: Path = Path("evals/baselines"),
+) -> Path | None:
+    """Ghi <baselines_dir>/v1_baseline.json, có guard: nếu tỷ lệ case fail do lỗi hạ
+    tầng (xem INFRA_FAIL_THRESHOLD/_is_infra_failure() ở trên) vượt ngưỡng, KHÔNG ghi
+    đè baseline chính — ghi ra v1_baseline_FAILED_<ts>.json thay vào đó, trừ khi
+    force_save_baseline=True. Nếu ghi đè: backup file cũ (nếu có) sang
+    v1_baseline.<ts>.json trước — sự cố thật 2026-09-24: 1 lần chạy 14/14 case fail vì
+    CHAT_BASE_URL trả 530 đã ghi đè mất baseline thật (58 case, 89.66%), phải revert
+    tay bằng git checkout.
+
+    baselines_dir mặc định là đường dẫn thật (evals/baselines), nhận tham số riêng để
+    test dùng tmp_path — tách khỏi main() để không phải mock toàn bộ Agent/eval loop
+    khi test guard logic.
+
+    Trả về Path đã ghi baseline CHÍNH (None nếu bị guard chặn, chỉ ghi ra file
+    _FAILED)."""
+    infra_fail_count = sum(
+        1 for r in all_results if _is_infra_failure(str(r["checks"].get("exception", "")))
+    )
+    infra_fail_ratio = infra_fail_count / total if total else 0.0
+
+    baselines_dir.mkdir(parents=True, exist_ok=True)
+    main_baseline_path = baselines_dir / "v1_baseline.json"
+
+    if infra_fail_ratio > INFRA_FAIL_THRESHOLD and not force_save_baseline:
+        failed_path = baselines_dir / f"v1_baseline_FAILED_{ts}.json"
+        failed_path.write_text(
+            json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        print(
+            f"\n⚠️  CẢNH BÁO: {infra_fail_count}/{total} case ({infra_fail_ratio*100:.1f}%) "
+            f"fail do lỗi HẠ TẦNG (vượt ngưỡng {INFRA_FAIL_THRESHOLD*100:.0f}%) — KHÔNG ghi "
+            f"đè {main_baseline_path}. Kết quả lần chạy này lưu riêng: {failed_path}. "
+            f"Dùng --force-save-baseline nếu vẫn muốn ghi đè."
+        )
+        return None
+
+    if main_baseline_path.exists():
+        backup_path = baselines_dir / f"v1_baseline.{ts}.json"
+        shutil.copy2(main_baseline_path, backup_path)
+        print(f"Backup baseline cũ: {backup_path}")
+    main_baseline_path.write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return main_baseline_path
 
 
 def _extract_retrieved_chunks(trace: list[dict]) -> list[dict]:
@@ -246,6 +343,17 @@ def evaluate_case(agent: Agent, case: dict) -> dict:
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--force-save-baseline", action="store_true",
+        help=(
+            "Ghi đè evals/baselines/v1_baseline.json ngay cả khi tỷ lệ case fail do lỗi "
+            f"hạ tầng vượt ngưỡng {INFRA_FAIL_THRESHOLD*100:.0f}%% (mặc định sẽ chặn, ghi "
+            "ra v1_baseline_FAILED_<timestamp>.json thay vào đó)."
+        ),
+    )
+    args = parser.parse_args()
+
     cases = load_cases()
     print(f"Đã tải {len(cases)} câu hỏi eval.\n")
 
@@ -425,10 +533,8 @@ def main():
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
-    BASELINES_DIR = Path("evals/baselines")
-    BASELINES_DIR.mkdir(parents=True, exist_ok=True)
-    (BASELINES_DIR / "v1_baseline.json").write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
+    baseline_saved_path = _save_baseline_with_guard(
+        summary, all_results, total, ts, args.force_save_baseline
     )
 
     print("\n" + "=" * 60)
@@ -478,7 +584,10 @@ def main():
 
     print(f"\nChi tiết: evals/results/eval_detail_{ts}.json")
     print(f"Tổng kết: evals/results/eval_summary_{ts}.json")
-    print(f"Baseline: evals/baselines/v1_baseline.json")
+    if baseline_saved_path:
+        print(f"Baseline: {baseline_saved_path}")
+    else:
+        print(f"Baseline: KHÔNG ghi đè (xem cảnh báo lỗi hạ tầng ở trên)")
 
     # --- Bước 5: threshold PASS/FAIL ---
     print("\n" + "=" * 60)
