@@ -8,7 +8,7 @@ services:
       # scripts like scripts/ingest_kb.py) — inside this container, the embeddings
       # service is reachable by its Compose service name, and on TEI's INTERNAL
       # port 80 (the 8000 in .env is the host-published port, not the container's).
-      - EMBEDDING_BASE_URL=http://embeddings:80/v1
+      - EMBEDDING_BASE_URL=http://embeddings:80/v1/embeddings
     depends_on:
       embeddings:
         condition: service_healthy
