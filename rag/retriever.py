@@ -6,8 +6,12 @@ from rag.chunker import count_tokens
 from tools.tool_results import success, failure
 from config.settings import SETTINGS
 
-# Ngưỡng xác định qua đo đạc thực tế ngày 2026-08-27, xem chi tiết trong DATA_SOURCES.md
-SCORE_THRESHOLD = 1.3
+# Đo lại 2026-09-24 sau khi đổi embedding model sang bge-m3 (thang đo distance khác
+# hẳn model cũ, giá trị 1.3 cũ KHÔNG áp dụng được — xem DATA_SOURCES.md). Known-good
+# distance thật đo trên VERIFIED_CASES: 0.8327 - 1.0020 (cao nhất). Nonsense-query floor
+# đo được: 1.175 - 1.211. Chọn 1.1 = cao nhất known-good + margin ~0.1, vẫn thấp hơn sàn
+# nonsense ~0.075 — cùng phương pháp đã dùng cho giá trị 1.3 cũ, xem DATA_SOURCES.md.
+SCORE_THRESHOLD = 1.1
 
 
 def retrieve(query: str, top_k: int | None = None, where: dict | None = None) -> list[dict]:

@@ -456,6 +456,68 @@ rate-limiting or network contention under sustained load; not yet investigated f
 full-suite run fails specifically in this file, re-run it alone before concluding there is a
 real regression.
 
+## Embedding model migration 2026-09-22/24: openai/text-embedding-3-small -> BAAI/bge-m3
+
+Switched embedding models after `OPENROUTER_API_KEY` expired (401), and after two
+follow-up local/remote providers also failed mid-session (Ollama on a LAN host hung
+unresponsive; a company TEI host stopped answering entirely). Landed on self-hosting
+TEI (`ghcr.io/huggingface/text-embeddings-inference:cpu-latest`, model `BAAI/bge-m3`,
+1024-dim) inside this project's own `docker-compose.yml`. Full corpus re-ingested from
+scratch 2026-09-24 (old collection was 1536-dim, embeddings from a different model
+cannot coexist with or be compared to new ones) — final count: 6,214 chunks from 20/20
+sources, 0 failures.
+
+**Backend limits, measured, not assumed:** the TEI backend forces an internal
+`max_batch_requests=8` regardless of `--max-batch-tokens` config (visible in its own
+startup logs) — batch=8 -> 200 OK (547ms), batch=32 -> 429 "Model is overloaded" even
+after raising `--max-concurrent-requests` 4->16, batch=100 -> 422 (exceeds
+`--max-client-batch-size=32`). `rag/embeddings.py:BATCH_SIZE` set to 8 accordingly. An
+earlier attempt at self-hosting via the `hwdsl2/embeddings-server` wrapper image failed
+outright: TEI's own default `--max-batch-tokens=16384` (not exposed as a tunable env
+var by that wrapper) drove warm-up to 793% CPU / 11.6GB RAM and it never became ready
+(300s timeout, 2 restarts). The official TEI image, where this flag is directly
+controllable, fixed it completely (`--max-batch-tokens 2048`): warm-up now takes ~17s,
+steady-state ~3.4GB/22% of Docker's RAM allocation.
+
+### SCORE_THRESHOLD re-measured for bge-m3 (1.3 -> 1.1)
+
+The old value (1.3, see "Score threshold for weak retrieval matches" above) was tuned
+against `text-embedding-3-small`'s distance distribution and does not transfer —
+bge-m3 produces distances on a visibly different scale. Re-measured 2026-09-24 using
+the same methodology (highest known-good distance + small margin, kept well below the
+nonsense-query floor), against `tests/test_retriever.py::VERIFIED_CASES`:
+
+- Nonsense-query floor (`"xyzabc123 completely unrelated nonsense query"`): distances
+  1.175 - 1.211 (top-10).
+- Known-good chunk distances, measured directly against each verified case's actual
+  ground-truth chunk (not just whatever ranked in top-10 — see below, two of these
+  chunks didn't rank in top-10 at all, so their real distance was measured by fetching
+  the specific chunk's embedding and computing L2 distance against the query directly):
+  0.8327 (case 3, ranked #2 in top-10), 0.9796-1.0020 (case 1's chunk, EVN 2024-2025
+  p9), 0.9667-0.9960 (case 2's chunk, EVN 2022-2023 p10).
+- New `SCORE_THRESHOLD = 1.1`: highest known-good (1.0020) + ~0.1 margin, still ~0.075
+  below the nonsense floor.
+
+Verified with `pytest tests/test_retriever.py -v` before AND after the threshold
+change: same result both times, **1 failed, 4 passed, 1 xfailed** — the threshold
+change itself introduces no new pass/fail difference; it only affects whether
+already-borderline retrieved results get filtered as "no relevant information."
+
+### New regression found during this migration — NOT hidden, NOT xfailed
+
+`test_verified_fact_appears_in_topk[...Tổng sản lượng điện thương phẩm năm 2023...]`
+(case 2: expects EVN Annual Report 2022-2023, page 10) **fails with bge-m3** and did
+**not** fail before this migration (unlike case 1, which was already a known xfail).
+At `top_k=100` (out of 6,214 chunks, i.e. top ~1.6%), the correct chunk still does not
+appear at all — this is a real ranking gap, not a threshold/filtering issue, since
+`SCORE_THRESHOLD` only filters results already retrieved and does not affect ranking.
+
+This test is left failing on purpose, not xfailed, so it stays visible rather than
+silently passing. Root cause not yet investigated (explicitly deferred per user
+decision 2026-09-24: get the eval suite's numbers first under the corrected threshold
+before spending time on root-causing this, to avoid guessing at a cause before there's
+enough evidence it's systemic rather than this one query).
+
 ### Lưu ý chi phí — chạy test có chọn lọc, không luôn full suite
 
 `tests/test_agent.py` và `tests/test_security.py` gọi API thật (không mock). Full suite
