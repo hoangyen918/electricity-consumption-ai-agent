@@ -4,8 +4,16 @@ from unittest.mock import patch
 import pytest
 import rag.kb_manager as kb_manager
 from config.settings import SETTINGS
+from rag.embeddings import embed_query
 from rag.vector_store import count_documents, get_collection
 from services.cost_tracker import calculate_embedding_cost
+
+# Dimension vector giả (fake_embed_batch) PHẢI khớp dimension THẬT của collection Chroma,
+# nếu không upsert sẽ raise InvalidArgumentError bất kể nội dung có mock hay không (xem
+# 3 test dùng biến này). Gọi embed_query() thật 1 lần duy nhất ở module-level thay vì
+# hardcode 1 số cố định — đã đổi embedding provider/model 4 lần trong 1 ngày
+# (2026-09-22/24, xem DATA_SOURCES.md), hardcode số sẽ lại gãy y hệt lần đổi tiếp theo.
+EMBEDDING_DIM = len(embed_query("dimension probe"))
 
 
 @pytest.fixture(autouse=True)
@@ -133,15 +141,9 @@ def test_add_document_reports_embedding_tokens_cost_and_duration():
     )
 
     def fake_embed_batch(batch, usage_accumulator=None):
-        """
-        Vector giả PHẢI đủ 1536 chiều (dimension thật của text-embedding-3-small):
-        collection Chroma thật ở storage/chroma/ đã cố định dimension này từ các
-        tài liệu embed thật trước đó, upsert vector sai dimension sẽ raise
-        InvalidArgumentError bất kể nội dung test có mock embedding hay không.
-        """
         if usage_accumulator is not None:
             usage_accumulator.append(37 * len(batch))
-        return [[0.001] * 1536 for _ in batch]
+        return [[0.001] * EMBEDDING_DIM for _ in batch]
 
     with patch("rag.embeddings._embed_batch", side_effect=fake_embed_batch):
         result = kb_manager.add_document(content, "cost_test.txt", "Cost Test")
@@ -149,7 +151,12 @@ def test_add_document_reports_embedding_tokens_cost_and_duration():
     try:
         assert result["chunk_count"] > 0
         assert result["token_count"] > 0
-        assert result["cost_usd"] > 0
+        # == 0, KHÔNG >= 0: SETTINGS.embedding_model hiện là BAAI/bge-m3, self-hosted,
+        # khai báo giá 0.0 tường minh trong services/cost_tracker.py:MODEL_PRICING (không
+        # phải fallback ngầm cho model thiếu cấu hình) — cost_usd=0.0 PHẢI đúng, không
+        # phải "chấp nhận được". Nếu SETTINGS.embedding_model đổi sang model tính phí sau
+        # này, assertion này sẽ tự fail rõ ràng (đúng ý, không im lặng bỏ qua).
+        assert result["cost_usd"] == 0
         assert result["duration_seconds"] > 0
 
         expected_cost = calculate_embedding_cost(SETTINGS.embedding_model, result["token_count"])
@@ -172,7 +179,7 @@ def test_add_document_rolls_back_chroma_chunks_when_sources_json_write_fails(mon
     def fake_embed_batch(batch, usage_accumulator=None):
         if usage_accumulator is not None:
             usage_accumulator.append(10 * len(batch))
-        return [[0.001] * 1536 for _ in batch]
+        return [[0.001] * EMBEDDING_DIM for _ in batch]
 
     def failing_save_sources(sources):
         raise OSError("Giả lập lỗi ghi file (vd hết dung lượng đĩa)")
@@ -231,7 +238,7 @@ def test_list_sources_with_chunk_counts_surfaces_orphan_and_delete_works():
         "year_end": "",
         "language": "",
     }
-    upsert_chunks([fake_chunk], [[0.001] * 1536])
+    upsert_chunks([fake_chunk], [[0.001] * EMBEDDING_DIM])
 
     try:
         listed = kb_manager.list_sources_with_chunk_counts()

@@ -24,6 +24,13 @@ MODEL_PRICING = {
         "input_per_million": 0.75,
         "output_per_million": 3.75,
     },
+    # Self-hosted qua docker-compose.yml (service "embeddings", TEI) từ 2026-09-24 —
+    # 0.0 khai báo TƯỜNG MINH (không dùng fallback None của .get() ở dưới) để phân biệt
+    # rõ "model này thật sự miễn phí" với "model bị thiếu cấu hình giá do quên thêm".
+    "BAAI/bge-m3": {
+        "input_per_million": 0.0,
+        "output_per_million": 0.0,
+    },
 }
 
 
