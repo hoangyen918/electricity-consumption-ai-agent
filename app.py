@@ -2369,14 +2369,32 @@ def render_wind_turbine_dashboard():
 
 
 def _normalize_latex_delimiters(text: str) -> str:
-    """Đổi \\[...\\] / \\(...\\) sang $$...$$ / $...$ trước khi hiển thị — Streamlit chỉ
-    render LaTeX với delimiter $/$$, không phải \\[\\]/\\(\\). Model đôi khi vẫn dùng
-    \\[...\\] dù system prompt (config/prompts.py, mục FORMATTING) đã yêu cầu $$...$$
-    — lớp chuẩn hóa này đảm bảo hiển thị đúng bất kể model có tuân thủ hay không.
-    Chỉ khớp dạng có backslash phía trước, KHÔNG đụng brackets thường như "[1]" hay
-    citation "[EVN Annual Report..., trang 10]"."""
+    """Đổi \\[...\\] / \\(...\\) / [...] (bare) sang $$...$$ / $...$ trước khi hiển thị —
+    Streamlit chỉ render LaTeX với delimiter $/$$, không phải \\[\\]/\\(\\). Model đôi
+    khi dùng \\[...\\] có backslash, đôi khi dùng bare [...] KHÔNG backslash — cả 2 đã
+    quan sát được thật (2026-09-24), dù system prompt (config/prompts.py, mục FORMATTING)
+    đã yêu cầu $$...$$. Lớp chuẩn hóa này đảm bảo hiển thị đúng bất kể model tuân thủ hay
+    không.
+
+    Case \\[...\\] / \\(...\\): backslash rõ ràng, đổi thẳng, không nhầm với gì khác.
+
+    Case bare [...] : PHẢI phân biệt với citation "[EVN Annual Report..., trang 10]"
+    hay "[1]" (cũng dùng bracket thường, không backslash). Chỉ đổi khi nội dung TRONG
+    bracket chứa 1 lệnh LaTeX (backslash + chữ, vd \\text, \\frac) — citation thật không
+    bao giờ chứa ký tự backslash. Giới hạn CHẤP NHẬN ĐƯỢC: 1 công thức bare không dùng
+    lệnh LaTeX nào (vd "[x^2 + y^2 = z^2]") sẽ KHÔNG được nhận diện — không có cách phân
+    biệt an toàn với citation trong trường hợp đó, và cả 2 case thật gặp phải đều có
+    \\text{...} nên không rơi vào giới hạn này."""
     text = re.sub(r"\\\[(.*?)\\\]", r"$$\1$$", text, flags=re.DOTALL)
     text = re.sub(r"\\\((.*?)\\\)", r"$\1$", text, flags=re.DOTALL)
+
+    def _bare_bracket_repl(m: "re.Match[str]") -> str:
+        inner = m.group(1)
+        if re.search(r"\\[a-zA-Z]", inner):
+            return f"$${inner}$$"
+        return m.group(0)
+
+    text = re.sub(r"\[(.*?)\]", _bare_bracket_repl, text, flags=re.DOTALL)
     return text
 
 
