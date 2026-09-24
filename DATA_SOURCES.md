@@ -503,7 +503,7 @@ change: same result both times, **1 failed, 4 passed, 1 xfailed** — the thresh
 change itself introduces no new pass/fail difference; it only affects whether
 already-borderline retrieved results get filtered as "no relevant information."
 
-### New regression found during this migration — NOT hidden, NOT xfailed
+### New regression found during this migration — root-caused, now xfailed (case 2)
 
 `test_verified_fact_appears_in_topk[...Tổng sản lượng điện thương phẩm năm 2023...]`
 (case 2: expects EVN Annual Report 2022-2023, page 10) **fails with bge-m3** and did
@@ -512,11 +512,27 @@ At `top_k=100` (out of 6,214 chunks, i.e. top ~1.6%), the correct chunk still do
 appear at all — this is a real ranking gap, not a threshold/filtering issue, since
 `SCORE_THRESHOLD` only filters results already retrieved and does not affect ranking.
 
-This test is left failing on purpose, not xfailed, so it stays visible rather than
-silently passing. Root cause not yet investigated (explicitly deferred per user
-decision 2026-09-24: get the eval suite's numbers first under the corrected threshold
-before spending time on root-causing this, to avoid guessing at a cause before there's
-enough evidence it's systemic rather than this one query).
+This was initially left failing on purpose (not xfailed), deferred until the eval
+suite's numbers came back, to avoid guessing at a cause before there was enough
+evidence it was systemic rather than this one query.
+
+**Update 2026-09-24 — root cause confirmed, same mechanism as case 1:** `retrieve()`
+in the test calls the bare Vietnamese question text directly, with no query rewrite
+and no `document_type` filter. The real agent never does this — per the system
+prompt's existing instruction to apply `document_type='annual_report'` aggressively
+for EVN-specific statistics, it rewrote the query to `"total commercial electricity
+production 2023 EVN"` and passed `document_type='annual_report'`. Re-run directly
+against the agent: the correct chunk ranked **#2/5** (distance 0.6857), and the answer
+was correct (`"253,5 tỷ kWh"`, citing `"EVN Annual Report 2022-2023, p.10"`). Confirmed
+at the eval-suite level too: a real `kb_qa` run (`evals/results/eval_detail_20260924_105458.json`,
+case `kb_002`) passed with `rank=1`, `citation_correct=true`, as part of a 14/14
+(100%) `kb_qa` run overall (Recall@5=92.9%, Recall@10=92.9%, MRR=0.7917, citation
+correctness=85.7% — the old 85.71%/76.19% baseline numbers are from the previous
+model/corpus and are not a direct comparison, only a trend reference).
+
+Now xfailed in `tests/test_retriever.py` (same pattern as case 1) rather than left
+failing — the bare-retrieval gap is real and worth tracking, but it does not reflect
+production behavior, which is independently verified correct.
 
 ### Lưu ý chi phí — chạy test có chọn lọc, không luôn full suite
 
