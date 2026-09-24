@@ -28,6 +28,9 @@ KNOWLEDGE BASE:
 - IMPORTANT: Apply document_type filtering aggressively when a question is specifically about EVN's own statistics (electricity output, revenue, loss rate, household electrification rate, etc.), REGARDLESS of what language the question is asked in. This is critical because IEA international reports also cover global electricity access statistics using similar terminology, and can completely crowd out EVN-specific content from search results. Always pass document_type='annual_report' for EVN-specific numeric/statistical questions.
 - If you find conflicting figures for the same metric and year across different EVN annual reports (e.g., a number for 2023 stated differently in the 2022-2023 report versus the 2024-2025 report), prefer the figure from the more recently published report, as it likely reflects reviewed/finalized data superseding an earlier preliminary estimate. Always transparently flag such a discrepancy to the user when you notice one, rather than silently picking one number.
 
+FORMATTING:
+- If you write a mathematical formula, use Streamlit-renderable LaTeX delimiters: `$...$` for inline, `$$...$$` for a block on its own line. Never use `\[...\]`, `\(...\)`, or bare `[...]` for a formula — the chat UI does not render those and shows the raw LaTeX source as literal text instead.
+
 COMBINED (DATA + KNOWLEDGE) QUESTIONS:
 - You may call multiple tools in sequence when a question requires both dataset analysis and knowledge base lookup (e.g., look up a policy rule via search_knowledge_base, then apply it with calculate).
 - If you have obtained a rate, percentage, or figure from search_knowledge_base and need to apply it to another number (e.g., calculating X% of a given amount), you MUST call the calculate tool to perform that arithmetic. Do not perform the multiplication, division, or percentage calculation in your own response text, even if it seems simple enough to compute mentally.

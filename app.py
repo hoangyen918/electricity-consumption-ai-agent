@@ -2368,6 +2368,18 @@ def render_wind_turbine_dashboard():
     dashboard_sections[selected_section]()
 
 
+def _normalize_latex_delimiters(text: str) -> str:
+    """Đổi \\[...\\] / \\(...\\) sang $$...$$ / $...$ trước khi hiển thị — Streamlit chỉ
+    render LaTeX với delimiter $/$$, không phải \\[\\]/\\(\\). Model đôi khi vẫn dùng
+    \\[...\\] dù system prompt (config/prompts.py, mục FORMATTING) đã yêu cầu $$...$$
+    — lớp chuẩn hóa này đảm bảo hiển thị đúng bất kể model có tuân thủ hay không.
+    Chỉ khớp dạng có backslash phía trước, KHÔNG đụng brackets thường như "[1]" hay
+    citation "[EVN Annual Report..., trang 10]"."""
+    text = re.sub(r"\\\[(.*?)\\\]", r"$$\1$$", text, flags=re.DOTALL)
+    text = re.sub(r"\\\((.*?)\\\)", r"$\1$", text, flags=re.DOTALL)
+    return text
+
+
 def _handle_chat_question(question: str) -> None:
     """Xử lý 1 câu hỏi chat — TÁI DÙNG bởi cả render_chat() (Chat mode) và drawer chat
     (_render_side_chat_drawer(), Dashboard mode). Đọc/ghi ĐÚNG 1 nguồn lịch sử chung
@@ -2516,7 +2528,7 @@ def _render_side_chat_drawer() -> None:
             st.caption("Chưa có câu hỏi nào — hỏi ngay bên dưới.")
         for msg in st.session_state.chat_history[-10:]:
             with st.chat_message(msg["role"]):
-                st.write(msg["content"])
+                st.write(_normalize_latex_delimiters(msg["content"]))
 
         question = st.chat_input("Hỏi về dữ liệu đang xem...", key="side_chat_input")
         if question:
@@ -2529,7 +2541,7 @@ def render_chat():
 
     for idx, msg in enumerate(st.session_state.chat_history):
         with st.chat_message(msg["role"]):
-            st.write(msg["content"])
+            st.write(_normalize_latex_delimiters(msg["content"]))
             if msg["role"] == "assistant" and "trace_info" in msg:
                 render_trace_expander(msg["trace_info"], idx)
 
