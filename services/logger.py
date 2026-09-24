@@ -46,11 +46,16 @@ def log_interaction(
     total_latency_ms: float,
     total_cost_usd: float,
     log_path: Path = LOG_PATH,
+    injection_flagged: bool = False,
 ) -> None:
     """
     result là dict trả về từ run_agent_loop(): answer, trace, iterations,
     hit_max_iterations, usage_per_call.
     log_path có thể override để test không ghi vào file thật.
+    injection_flagged: kết quả agent.loop._looks_like_injection_attempt(question) —
+    Lớp 2 chống prompt injection (2026-09-24), xem agent/agent.py. CHỈ để thu thập dữ
+    liệu thật (tần suất gặp injection, Lớp 1+2 có đủ chặn khi bị flag hay không) —
+    KHÔNG ảnh hưởng gì tới việc xử lý câu hỏi.
     """
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -68,6 +73,7 @@ def log_interaction(
         "estimated_cost_usd": round(total_cost_usd, 8),
         "answer_preview": (result["answer"][:200] if result["answer"] else None),
         "status": "success" if not result["hit_max_iterations"] else "max_iterations_reached",
+        "injection_flagged": injection_flagged,
     }
 
     with log_path.open("a", encoding="utf-8") as f:
