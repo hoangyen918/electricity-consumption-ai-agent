@@ -108,20 +108,28 @@ def _save_baseline_with_guard(
     force_save_baseline: bool,
     baselines_dir: Path = Path("evals/baselines"),
 ) -> Path | None:
-    """Ghi <baselines_dir>/v1_baseline.json, có guard: nếu tỷ lệ case fail do lỗi hạ
-    tầng (xem INFRA_FAIL_THRESHOLD/_is_infra_failure() ở trên) vượt ngưỡng, KHÔNG ghi
-    đè baseline chính — ghi ra v1_baseline_FAILED_<ts>.json thay vào đó, trừ khi
-    force_save_baseline=True. Nếu ghi đè: backup file cũ (nếu có) sang
-    v1_baseline.<ts>.json trước — sự cố thật 2026-09-24: 1 lần chạy 14/14 case fail vì
-    CHAT_BASE_URL trả 530 đã ghi đè mất baseline thật (58 case, 89.66%), phải revert
-    tay bằng git checkout.
+    """Ghi <baselines_dir>/v1_baseline.json, có 2 guard ĐỘC LẬP — vượt 1 trong 2 (và
+    không force_save_baseline) đều KHÔNG ghi đè baseline chính:
+
+    1. Tỷ lệ case fail do lỗi hạ tầng (xem INFRA_FAIL_THRESHOLD/_is_infra_failure() ở
+       trên) vượt ngưỡng — ghi ra v1_baseline_FAILED_<ts>.json. Sự cố thật 2026-09-24:
+       1 lần chạy 14/14 case fail vì CHAT_BASE_URL trả 530 đã ghi đè mất baseline thật
+       (58 case, 89.66%), phải revert tay bằng git checkout.
+    2. total_cases của lần chạy MỚI < total_cases đang có trong baseline hiện tại (đọc
+       từ chính file trước khi ghi đè) — ghi ra
+       v1_baseline_PARTIAL_<n_cases>cases_<ts>.json. Sự cố thật khác cùng ngày: chạy
+       eval CHỈ subset kb_qa (14 case, hợp lệ, KHÔNG lỗi hạ tầng — guard #1 không bắt
+       được) đã ghi đè mất baseline full-suite (58 case) bằng kết quả 14-case, phải
+       revert tay lần thứ 2 trong ngày.
+
+    Nếu ghi đè (không vướng guard nào, hoặc force_save_baseline=True): backup file cũ
+    (nếu có) sang v1_baseline.<ts>.json trước.
 
     baselines_dir mặc định là đường dẫn thật (evals/baselines), nhận tham số riêng để
     test dùng tmp_path — tách khỏi main() để không phải mock toàn bộ Agent/eval loop
     khi test guard logic.
 
-    Trả về Path đã ghi baseline CHÍNH (None nếu bị guard chặn, chỉ ghi ra file
-    _FAILED)."""
+    Trả về Path đã ghi baseline CHÍNH (None nếu bị 1 trong 2 guard chặn)."""
     infra_fail_count = sum(
         1 for r in all_results if _is_infra_failure(str(r["checks"].get("exception", "")))
     )
@@ -142,6 +150,26 @@ def _save_baseline_with_guard(
             f"Dùng --force-save-baseline nếu vẫn muốn ghi đè."
         )
         return None
+
+    if main_baseline_path.exists() and not force_save_baseline:
+        try:
+            existing_total = json.loads(main_baseline_path.read_text(encoding="utf-8")).get(
+                "total_cases"
+            )
+        except (json.JSONDecodeError, OSError):
+            existing_total = None
+        if existing_total is not None and total < existing_total:
+            partial_path = baselines_dir / f"v1_baseline_PARTIAL_{total}cases_{ts}.json"
+            partial_path.write_text(
+                json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            print(
+                f"\n⚠️  CẢNH BÁO: lần chạy này chỉ có {total} case, ÍT HƠN baseline hiện "
+                f"tại ({existing_total} case) — KHÔNG ghi đè {main_baseline_path} (sẽ làm "
+                f"baseline mất tính đại diện cho toàn bộ suite). Kết quả lần chạy này lưu "
+                f"riêng: {partial_path}. Dùng --force-save-baseline nếu vẫn muốn ghi đè."
+            )
+            return None
 
     if main_baseline_path.exists():
         backup_path = baselines_dir / f"v1_baseline.{ts}.json"
@@ -347,9 +375,11 @@ def main():
     parser.add_argument(
         "--force-save-baseline", action="store_true",
         help=(
-            "Ghi đè evals/baselines/v1_baseline.json ngay cả khi tỷ lệ case fail do lỗi "
-            f"hạ tầng vượt ngưỡng {INFRA_FAIL_THRESHOLD*100:.0f}%% (mặc định sẽ chặn, ghi "
-            "ra v1_baseline_FAILED_<timestamp>.json thay vào đó)."
+            "Ghi đè evals/baselines/v1_baseline.json ngay cả khi bị 1 trong 2 guard chặn: "
+            f"(1) tỷ lệ case fail do lỗi hạ tầng vượt ngưỡng {INFRA_FAIL_THRESHOLD*100:.0f}%% "
+            "(mặc định ghi ra v1_baseline_FAILED_<timestamp>.json), hoặc (2) total_cases lần "
+            "chạy này ít hơn baseline hiện tại (mặc định ghi ra "
+            "v1_baseline_PARTIAL_<n_cases>cases_<timestamp>.json)."
         ),
     )
     args = parser.parse_args()
